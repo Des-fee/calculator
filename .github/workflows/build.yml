@@ -25,8 +25,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          id=$(gh api repos/${{ github.repository }}/releases/tags/model-weights \
-                 --jq '.assets[] | select(.name == "comer_mathwriting.ckpt") | .id' 2>/dev/null || true)
+          id=""
+          if gh api repos/${{ github.repository }}/releases/tags/model-weights > /tmp/rel.json 2>/dev/null; then
+            id=$(jq -r '.assets[] | select(.name == "comer_mathwriting.ckpt") | .id' /tmp/rel.json)
+          fi
           echo "id=${id:-none}" >> "$GITHUB_OUTPUT"
           echo "fine-tuned weights asset: ${id:-none}"
 
