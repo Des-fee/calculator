@@ -114,10 +114,11 @@ class MainActivity : Activity(), InkView.Listener {
         gravity = Gravity.CENTER
         minWidth = dpi(40f)
         setPadding(dpi(12f), dpi(8f), dpi(12f), dpi(8f))
+        val pal = this@MainActivity.colors
         background = GradientDrawable().apply {
             cornerRadius = dp(18f)
-            setColor(colors.paper)
-            setStroke(dpi(1f), colors.rule)
+            setColor(pal.paper)
+            setStroke(dpi(1f), pal.rule)
         }
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             marginEnd = dpi(6f)
