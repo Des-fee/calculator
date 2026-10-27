@@ -74,6 +74,25 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
 
     fun snapshot(): List<Stroke> = synchronized(strokes) { strokes.toList() }
 
+    /** Replace the page with strokes given as flat [x0, y0, x1, y1, …] lists (used by tests). */
+    fun setStrokes(list: List<List<Float>>) {
+        synchronized(strokes) {
+            strokes.clear()
+            for (pts in list) {
+                val s = Stroke(nextId++)
+                var i = 0
+                while (i + 1 < pts.size) {
+                    s.add(pts[i], pts[i + 1])
+                    i += 2
+                }
+                if (s.size > 0) strokes.add(s)
+            }
+        }
+        offsetY = 0f
+        invalidate()
+        listener?.onInkChanged()
+    }
+
     fun hasInk(): Boolean = strokes.isNotEmpty()
 
     fun setAnnotations(list: List<Annotation>) {

@@ -80,7 +80,33 @@ class MainActivity : Activity(), InkView.Listener {
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         setContentView(buildLayout())
         setStatus(getString(R.string.loading), null)
+        loadTestInk(intent)
         worker.execute { load() }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        loadTestInk(intent)
+        if (engine != null) scheduleRecognition()
+    }
+
+    /** Automated tests pass handwriting as base64 JSON: [[x0,y0,x1,y1,…], …] in dp. */
+    private fun loadTestInk(intent: Intent?) {
+        val b64 = intent?.getStringExtra("ink_b64") ?: return
+        try {
+            val arr = JSONArray(String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT)))
+            val d = resources.displayMetrics.density
+            val list = ArrayList<List<Float>>()
+            for (i in 0 until arr.length()) {
+                val pts = arr.getJSONArray(i)
+                list.add(List(pts.length()) { (pts.getDouble(it) * d).toFloat() })
+            }
+            ink.setStrokes(list)
+            overrides.clear()
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "bad test ink", e)
+        }
     }
 
     override fun onDestroy() {
@@ -432,6 +458,7 @@ class MainActivity : Activity(), InkView.Listener {
             }
         } catch (e: Throwable) {
             loadError = e.toString()
+            android.util.Log.e(TAG, "load failed", e)
             ui.post { setStatus(getString(R.string.load_failed), e.message) }
         }
     }
@@ -509,6 +536,11 @@ class MainActivity : Activity(), InkView.Listener {
             focusedId = focus
             ink.setAnnotations(buildAnnotations())
             updatePanel()
+            for (r in res.values) {
+                android.util.Log.i(TAG, "RESULT " + JSONObject().put("id", r.id).put("input", r.input).put("kind", r.kind)
+                    .put("answer", r.answer ?: JSONObject.NULL).put("error", r.error ?: JSONObject.NULL))
+            }
+            android.util.Log.i(TAG, "DONE " + res.size)
         }
     }
 
@@ -571,6 +603,7 @@ class MainActivity : Activity(), InkView.Listener {
 
     companion object {
         const val PAUSE_MS = 700L
+        const val TAG = "Calc"
         const val DOWNLOAD_URL = "https://github.com/Des-fee/calculator/releases/latest/download/calculator.apk"
     }
 }

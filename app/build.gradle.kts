@@ -18,7 +18,8 @@ android {
         versionCode = buildNumber
         versionName = "1.0.$buildNumber"
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            // phones are arm64; CI emulator tests pass -Pabis=x86_64
+            abiFilters += ((project.findProperty("abis") as String?) ?: "arm64-v8a").split(",")
         }
     }
 
