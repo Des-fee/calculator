@@ -1,0 +1,100 @@
+name: Build and publish APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  model:
+    name: Handwriting model (CoMER -> ONNX)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache exported model
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: model-out
+          key: comer-onnx-${{ hashFiles('model/export_onnx.py') }}
+
+      - uses: actions/setup-python@v5
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          python-version: "3.11"
+
+      - name: Export and evaluate
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/Green-Wood/CoMER /tmp/CoMER
+          pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install onnx==1.17.0 onnxruntime==1.20.1 pytorch-lightning==2.4.0 einops pillow opencv-python-headless
+          python model/export_onnx.py /tmp/CoMER model-out 300 | tee model-out/export.log
+
+      - name: Model report
+        run: tail -n 25 model-out/export.log >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: model
+          path: |
+            model-out/encoder.onnx
+            model-out/decoder.onnx
+            model-out/vocab.txt
+
+  android:
+    name: Android APK
+    needs: model
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: model
+          path: app/src/main/assets/model
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Engine tests
+        run: |
+          pip install sympy==1.13.3
+          python tests/test_engine.py
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build release APK
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          ./gradlew --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk calculator.apk
+          ls -la calculator.apk
+
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Калькулятор 1.0.${{ github.run_number }}
+          body: |
+            Сборка из коммита ${{ github.sha }}.
+            Постоянная ссылка на последнюю версию:
+            https://github.com/${{ github.repository }}/releases/latest/download/calculator.apk
+          files: calculator.apk
+          make_latest: "true"
