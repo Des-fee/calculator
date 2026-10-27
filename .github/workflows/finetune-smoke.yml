@@ -1,0 +1,52 @@
+name: Fine-tuning script check
+
+# Runs model/finetune_mathwriting.py for a few CPU steps on the MathWriting excerpt and exports the
+# result to ONNX, so the Kaggle notebook is known to work before hours of GPU time are spent on it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - model/finetune_mathwriting.py
+      - model/build_kaggle_notebook.py
+      - model/kaggle_finetune.ipynb
+      - model/export_onnx.py
+      - .github/workflows/finetune-smoke.yml
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Notebook is up to date
+        run: |
+          python model/build_kaggle_notebook.py
+          git diff --exit-code model/kaggle_finetune.ipynb
+
+      - name: Install
+        run: |
+          git clone --depth 1 https://github.com/Green-Wood/CoMER /tmp/CoMER
+          pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install onnx==1.17.0 onnxruntime==1.20.1 pytorch-lightning==2.4.0 einops pillow opencv-python-headless 2>&1 | tail -n 3
+
+      - name: Train a few steps on the excerpt
+        run: |
+          set -o pipefail
+          SMOKE=1 COMER_DIR=/tmp/CoMER OUT_DIR=smoke-out python -u model/finetune_mathwriting.py 2>&1 | tee build.log
+          cat smoke-out/metrics.json
+
+      - name: Export the fine-tuned checkpoint
+        run: |
+          set -o pipefail
+          COMER_CKPT=smoke-out/comer_mathwriting.ckpt python model/export_onnx.py /tmp/CoMER smoke-onnx 10 2>&1 | tee -a build.log
+
+      - name: Report
+        if: always()
+        run: |
+          python3 .github/annotate.py build.log | sed 's/::error title=Build log::/::notice title=Smoke log::/' 

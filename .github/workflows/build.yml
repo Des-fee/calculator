@@ -19,12 +19,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # fine-tuned weights are published by the Kaggle notebook as an asset of the "model-weights" pre-release
+      - name: Fine-tuned weights
+        id: weights
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh api repos/${{ github.repository }}/releases/tags/model-weights \
+                 --jq '.assets[] | select(.name == "comer_mathwriting.ckpt") | .id' 2>/dev/null || true)
+          echo "id=${id:-none}" >> "$GITHUB_OUTPUT"
+          echo "fine-tuned weights asset: ${id:-none}"
+
       - name: Cache exported model
         id: cache
         uses: actions/cache@v4
         with:
           path: model-out
-          key: comer-onnx-${{ hashFiles('model/export_onnx.py') }}
+          key: comer-onnx-${{ hashFiles('model/export_onnx.py') }}-${{ steps.weights.outputs.id }}
 
       - uses: actions/setup-python@v5
         if: steps.cache.outputs.cache-hit != 'true'
@@ -33,13 +44,20 @@ jobs:
 
       - name: Export and evaluate
         if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git clone --depth 1 https://github.com/Green-Wood/CoMER /tmp/CoMER
           pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
           pip install onnx==1.17.0 onnxruntime==1.20.1 pytorch-lightning==2.4.0 einops pillow opencv-python-headless 2>&1 | tail -n 5
           mkdir -p model-out
+          if [ "${{ steps.weights.outputs.id }}" != "none" ]; then
+            gh release download model-weights -R ${{ github.repository }} -p comer_mathwriting.ckpt -D /tmp/weights
+            export COMER_CKPT=/tmp/weights/comer_mathwriting.ckpt
+            echo "using fine-tuned weights" | tee model-out/export.log
+          fi
           set -o pipefail
-          python model/export_onnx.py /tmp/CoMER model-out 300 2>&1 | tee model-out/export.log
+          python model/export_onnx.py /tmp/CoMER model-out 300 2>&1 | tee -a model-out/export.log
           echo "::notice title=Model::$(grep ExpRate model-out/export.log)"
 
       - name: Report failure

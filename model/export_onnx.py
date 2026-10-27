@@ -8,7 +8,7 @@ that every shape stays dynamic in the exported graph. The script checks the
 re-implementation against the original model and the ONNX graphs against
 PyTorch, then measures the expression recognition rate on CROHME 2014.
 
-usage: python export_onnx.py <CoMER repo dir> <out dir> [n_eval]
+usage: [COMER_CKPT=file] python export_onnx.py <CoMER repo dir> <out dir> [n_eval]
 """
 
 import math
@@ -31,7 +31,9 @@ sys.path.insert(0, COMER)
 from comer.datamodule import vocab  # noqa: E402
 from comer.model.comer import CoMER  # noqa: E402
 
-CKPT = os.path.join(COMER, "lightning_logs/version_0/checkpoints/epoch=151-step=57151-val_ExpRate=0.6365.ckpt")
+# COMER_CKPT: a fine-tuned checkpoint (model/finetune_mathwriting.py); default: the published CROHME one
+CKPT = os.environ.get("COMER_CKPT") or os.path.join(
+    COMER, "lightning_logs/version_0/checkpoints/epoch=151-step=57151-val_ExpRate=0.6365.ckpt")
 
 
 def load_model():
