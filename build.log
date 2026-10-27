@@ -1,0 +1,9 @@
+sum       FAIL  [{"id": "L:1,2,3,4,5,6", "input": "2 + 2", "kind": "none", "answer": null, "error": null}]
+equation  OK    [{"id": "L:1,2,3,4,5,6,7,8,9", "input": "2 x + 1 = 7", "kind": "solve", "answer": "x = 3", "error": null}]
+fraction  FAIL  [{"id": "L:1,2,3,4,5,6,7,8,9,10", "input": "((1)/(2)) + ((1)/(4))", "kind": "none", "answer": null, "error": null}]
+system    OK    [{"id": "S:2,3,4,5,6,7,8,9,10|11,12,13,14,15,16,17,18", "input": "x + y = 5; x - y = 1", "kind": "system", "answer": "x = 3, y = 2", "error": null}]
+system_close OK    [{"id": "S:2,3,4,5,6,7,8,9,10,11|12,13,14,15,16,17,18,19", "input": "2 x + y = 5; x - y = 1", "kind": "system", "answer": "x = 2, y = 1", "error": null}]
+system_2strokes OK    [{"id": "S:2,3,4,5,6,7,8,9,10,11|12,13,14,15,16,17,18,19", "input": "2 x + y = 5; x - y = 1", "kind": "system", "answer": "x = 2, y = 1", "error": null}, {"id": "S:3,4,5,6,7,8,9,10,11|12,13,14,15,16,17,18,19", "input": "x + y = 5; x - y = 1", "kind": "system", "answer": "x = 3, y = 2", "error": null}]
+system_short OK    [{"id": "S:3,4,5,6,7,8,9,10,11|12,13,14,15,16,17,18,19", "input": "x + y = 5; x - y = 1", "kind": "system", "answer": "x = 3, y = 2", "error": null}, {"id": "S:2,3,4,5,6,7,8,9,10|11,12,13,14,15,16,17,18", "input": "x + y = 5; x - y = 1", "kind": "system", "answer": "x = 3, y = 2", "error": null}]
+check     OK    [{"id": "S:2,3,4,5,6,7,8,9,10|11,12,13,14,15,16,17,18", "input": "x + y = 5; x - y = 1", "kind": "system", "answer": "x = 3, y = 2", "error": null}, {"id": "L:1,2,3,4,5,6,7", "input": "3 + 4 = 7", "kind": "check", "answer": "✓", "error": null}]
+passed 6/8
