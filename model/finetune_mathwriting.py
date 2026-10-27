@@ -289,10 +289,10 @@ def load_mathwriting():
 # glyph box in "em" (digit height = 1, y down, baseline at 1): (top, bottom) or special handling
 SHORT = set("acemnorsuvwxz")
 DESC = set("gpqy")
-BOXES = {".": (0.86, 1.0), "\\cdot": (0.53, 0.67), "+": (0.25, 0.9), "\\times": (0.32, 0.88), "\\div": (0.25, 0.92), "<": (0.3, 0.9), ">": (0.3, 0.9),
+BOXES = {"d": (0.0, 1.0), ".": (0.86, 1.0), "\\cdot": (0.53, 0.67), "+": (0.25, 0.9), "\\times": (0.32, 0.88), "\\div": (0.25, 0.92), "<": (0.3, 0.9), ">": (0.3, 0.9),
          "(": (-0.12, 1.15), ")": (-0.12, 1.15), "/": (-0.05, 1.08)}
 FLAT = {"-": 0.6, "=": 0.6}  # centre height of flat glyphs
-CALC_GLYPHS = set("0123456789xyabcnt+-=()/<>.") | {"\\times", "\\div", "\\cdot"}
+CALC_GLYPHS = set("0123456789xyabcdnt+-=()/<>.") | {"\\times", "\\div", "\\cdot", "\\int"}
 
 
 class Layout:
@@ -363,12 +363,64 @@ def put_number(lay, glyphs, rng, scale=1.0, dy=0.0, decimal_p=0.15):
         put(lay, str(rng.randint(0, 9)), glyphs, rng, scale, dy)
 
 
-def put_power(lay, glyphs, rng, base_fn, scale=1.0, dy=0.0):
-    base_fn()
+def put_exponent(lay, glyphs, rng, scale, dy, depth=1):
+    """'^ { e }' after the glyph just written; e can carry its own exponent (towers 2^{3^{4^{...}}})."""
     lay.tokens += ["^", "{"]
     lay.x -= 0.08 * scale
-    put(lay, rng.choice("2223n"), glyphs, rng, scale * 0.6, dy - 0.42 * scale)
+    s = scale * rng.uniform(0.55, 0.7)
+    edy = dy + rng.uniform(0.38, 0.55) * scale - s  # exponent baseline near the middle of its base
+    r = rng.random()
+    if r < 0.55:
+        put(lay, rng.choice("22345"), glyphs, rng, s, edy)
+    elif r < 0.75:
+        put(lay, rng.choice("xn"), glyphs, rng, s, edy)
+    else:
+        put(lay, rng.choice("123"), glyphs, rng, s, edy)
+        put(lay, rng.choice("+-"), glyphs, rng, s, edy)
+        put(lay, rng.choice("12xn"), glyphs, rng, s, edy)
+    if depth < 4 and rng.random() < 0.5:
+        put_exponent(lay, glyphs, rng, s, edy, depth + 1)
     lay.tokens.append("}")
+    lay.x += 0.05 * scale
+
+
+def put_power(lay, glyphs, rng, base_fn, scale=1.0, dy=0.0):
+    base_fn()
+    put_exponent(lay, glyphs, rng, scale, dy)
+
+
+def put_integral(lay, glyphs, rng, var):
+    """∫_a^b f dx with small limits at the sign, or an indefinite ∫ f dx."""
+    x0 = lay.x
+    st, w = _fit(rng.choice(glyphs["\\int"]), x0, rng.uniform(-0.5, -0.3), rng.uniform(1.3, 1.5), rng)
+    lay.strokes += st
+    lay.tokens.append("\\int")
+    right = x0 + w
+    if rng.random() < 0.8:
+        s = rng.uniform(0.5, 0.62)
+        for sub_sup, xk, dy in (("_", 0.7, rng.uniform(1.05, 1.25)), ("^", 1.0, rng.uniform(-0.2, 0.0) - s)):
+            lay.tokens += [sub_sup, "{"]
+            lay.x = x0 + w * xk
+            if sub_sup == "_" and rng.random() < 0.5:
+                put(lay, "0", glyphs, rng, s, dy)
+            else:
+                put_number(lay, glyphs, rng, s, dy, decimal_p=0)
+            lay.tokens.append("}")
+            right = max(right, lay.x)
+    lay.x = right + rng.uniform(0.15, 0.35)
+    r = rng.random()
+    if r < 0.5:
+        put_power(lay, glyphs, rng, lambda: put(lay, var, glyphs, rng))
+    elif r < 0.75:
+        put_number(lay, glyphs, rng, decimal_p=0)
+        put(lay, var, glyphs, rng)
+    else:
+        put(lay, var, glyphs, rng)
+        put(lay, rng.choice(["+", "-"]), glyphs, rng)
+        put_number(lay, glyphs, rng, decimal_p=0)
+    lay.x += rng.uniform(0.05, 0.25)
+    put(lay, "d", glyphs, rng)
+    put(lay, var, glyphs, rng)
 
 
 def put_fraction(lay, glyphs, rng, scale=1.0):
@@ -397,6 +449,9 @@ def calc_line(glyphs, rng):
     lay = Layout()
     var = rng.choice(["x", "x", "y", "a", "n", "t"])
     ops = ["+", "-", "\\times", "\\times", "\\cdot", "\\div", "/"]
+    if "\\int" in glyphs and "d" in glyphs and rng.random() < 0.15:
+        put_integral(lay, glyphs, rng, rng.choice(["x", "x", "t"]))
+        return lay
 
     def operand():
         r = rng.random()
@@ -406,8 +461,8 @@ def calc_line(glyphs, rng):
             if rng.random() < 0.5:
                 put_number(lay, glyphs, rng, decimal_p=0)
             put(lay, var, glyphs, rng)
-        elif r < 0.72:
-            put_power(lay, glyphs, rng, lambda: put(lay, var, glyphs, rng) if rng.random() < 0.6
+        elif r < 0.75:
+            put_power(lay, glyphs, rng, lambda: put(lay, var, glyphs, rng) if rng.random() < 0.5
                       else put_number(lay, glyphs, rng, decimal_p=0))
         elif r < 0.85:
             put_fraction(lay, glyphs, rng)
@@ -426,6 +481,18 @@ def calc_line(glyphs, rng):
         put(lay, "=", glyphs, rng)
         put_number(lay, glyphs, rng)
     return lay
+
+
+def safe_calc_line(glyphs, rng, tries=10):
+    """calc_line(), retried when it picked a symbol that has no handwritten glyph in the data."""
+    for _ in range(tries):
+        try:
+            lay = calc_line(glyphs, rng)
+        except (KeyError, IndexError):
+            continue
+        if lay.strokes and all(t in VOCAB for t in lay.tokens):
+            return lay
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -483,12 +550,13 @@ class Mixed(torch.utils.data.Dataset):
             img, toks = self.crohme[(i - len(self.inks)) % len(self.crohme)]
             img = fit_range(img)
         else:
-            for _ in range(10):
-                lay = calc_line(self.glyphs, rng)
-                if lay.strokes:
-                    break
-            strokes = normalise_units([s.astype(np.float32) for s in lay.strokes])
-            img, toks = render_train(strokes, rng), lay.tokens
+            lay = safe_calc_line(self.glyphs, rng)
+            if lay is None:  # no usable glyphs: fall back to a real ink
+                strokes, toks = self.inks[i % len(self.inks)]
+                img = render_train(strokes, rng)
+            else:
+                strokes = normalise_units([s.astype(np.float32) for s in lay.strokes])
+                img, toks = render_train(strokes, rng), lay.tokens
         return img, vocab.words2indices(toks)
 
 
@@ -572,8 +640,9 @@ def main():
     calc_valid = []
     if calc_ok:
         for _ in range(16 if SMOKE else 300):
-            lay = calc_line(usable, rng)
-            calc_valid.append((normalise_units(lay.strokes), lay.tokens))
+            lay = safe_calc_line(usable, rng)
+            if lay is not None:
+                calc_valid.append((normalise_units(lay.strokes), lay.tokens))
     if not valid:  # the excerpt may have no valid inks
         valid = train[: VALID_MAX]
 
