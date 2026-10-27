@@ -135,7 +135,7 @@ jobs:
   device-test:
     name: Emulator test
     needs: model
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -172,13 +172,11 @@ jobs:
         continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 29
+          api-level: 30
           arch: x86_64
-          target: default
-          cores: 4
-          ram-size: 3072M
+          target: google_apis
+          ram-size: 4096M
           disable-animations: true
-          emulator-boot-timeout: 900
           script: python3 tests/device_test.py app/build/outputs/apk/release/app-release.apk device-out 2>&1 | tee build.log
 
       - name: "Run on emulator (second attempt, the emulator sometimes fails to boot)"
@@ -187,13 +185,11 @@ jobs:
         continue-on-error: false
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 29
+          api-level: 30
           arch: x86_64
-          target: default
-          cores: 4
-          ram-size: 3072M
+          target: google_apis
+          ram-size: 4096M
           disable-animations: true
-          emulator-boot-timeout: 900
           script: python3 tests/device_test.py app/build/outputs/apk/release/app-release.apk device-out 2>&1 | tee build.log
 
       - name: Report failure
