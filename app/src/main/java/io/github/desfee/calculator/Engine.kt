@@ -25,6 +25,10 @@ class Engine(context: Context) {
         val answer: String?,
         val plot: String?,
         val error: String?,
+        /** Typeset input (LaTeX), when it could be produced. */
+        val inputTex: String? = null,
+        /** Typeset answer, one LaTeX string per answer line. */
+        val tex: List<String>? = null,
     )
 
     fun evaluate(items: JSONArray): Map<String, Result> {
@@ -39,6 +43,8 @@ class Engine(context: Context) {
                 answer = o.optStringOrNull("answer"),
                 plot = o.optStringOrNull("plot"),
                 error = o.optStringOrNull("error"),
+                inputTex = o.optStringOrNull("input_tex"),
+                tex = o.optJSONArray("tex")?.let { a -> List(a.length()) { a.getString(it) } },
             )
             map[r.id] = r
         }

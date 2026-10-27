@@ -155,6 +155,8 @@ jobs:
           target: google_apis
           ram-size: 4096M
           disable-animations: true
+          emulator-boot-timeout: 1200
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: python3 tests/device_test.py app/build/outputs/apk/release/app-release.apk device-out 2>&1 | tee build.log
 
       - name: Report failure

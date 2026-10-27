@@ -9,25 +9,40 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.view.MotionEvent
+import android.view.VelocityTracker
 import android.view.View
+import android.view.ViewConfiguration
+import android.widget.OverScroller
+import ru.noties.jlatexmath.JLatexMathDrawable
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
-/** Text drawn on the page next to the handwriting (an answer). */
+/**
+ * An answer drawn on the page next to the handwriting: one or more lines, each
+ * typeset from LaTeX when available, otherwise drawn as handwriting-like text.
+ */
 class Annotation(
     val itemId: String,
     val lines: List<String>,
+    val tex: List<String?>?,
+    /** Preferred place: to the right of the item, vertically centred on [centerY]. */
     val x: Float,
     val centerY: Float,
+    /** Fallback place under the item (left, top) when there is no room on the right. */
+    val belowX: Float,
+    val belowY: Float,
     val textSize: Float,
     val muted: Boolean,
 ) {
     val hitRect = RectF()
+    internal var rows: List<Row>? = null
+
+    internal class Row(val drawable: JLatexMathDrawable?, val text: String?, val w: Float, val h: Float)
 }
 
-/** The writing surface: one finger writes, two fingers scroll. */
+/** The writing surface: an endless sheet. One finger writes, two fingers move the sheet in any direction. */
 @SuppressLint("ViewConstructor")
 class InkView(context: Context, private val colors: Palette) : View(context) {
     interface Listener {
@@ -44,9 +59,16 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
     private var nextId = 1L
     private var current: Stroke? = null
     private var annotations: List<Annotation> = emptyList()
+
+    // sheet position: page coordinate shown at the top-left corner of the view
+    private var offsetX = 0f
     private var offsetY = 0f
     private var panning = false
+    private var lastPanX = 0f
     private var lastPanY = 0f
+    private val scroller = OverScroller(context)
+    private var velocity: VelocityTracker? = null
+
     private var downTime = 0L
     private val density = resources.displayMetrics.density
 
@@ -88,8 +110,7 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
                 if (s.size > 0) strokes.add(s)
             }
         }
-        offsetY = 0f
-        invalidate()
+        scrollToStart()
         listener?.onInkChanged()
     }
 
@@ -97,6 +118,14 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
 
     fun setAnnotations(list: List<Annotation>) {
         annotations = list
+        invalidate()
+    }
+
+    /** Back to the top-left corner of the sheet. */
+    fun scrollToStart() {
+        scroller.forceFinished(true)
+        offsetX = 0f
+        offsetY = 0f
         invalidate()
     }
 
@@ -114,9 +143,8 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
         if (strokes.isEmpty()) return
         pushUndo()
         synchronized(strokes) { strokes.clear() }
-        offsetY = 0f
         annotations = emptyList()
-        invalidate()
+        scrollToStart()
         listener?.onInkChanged()
     }
 
@@ -128,13 +156,13 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
     override fun onDraw(canvas: Canvas) {
         canvas.drawColor(colors.paper)
         val step = 56f * density
-        var y = step - (offsetY % step)
+        var y = step - (((offsetY % step) + step) % step)
         while (y < height) {
             canvas.drawLine(0f, y, width.toFloat(), y, rulePaint)
             y += step
         }
         canvas.save()
-        canvas.translate(0f, -offsetY)
+        canvas.translate(-offsetX, -offsetY)
         synchronized(strokes) {
             for (s in strokes) drawStroke(canvas, s)
         }
@@ -144,6 +172,14 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
         if (strokes.isEmpty() && current == null) {
             canvas.drawText(context.getString(R.string.hint_write), width / 2f, height / 2.4f, hintPaint)
             canvas.drawText(context.getString(R.string.hint_write2), width / 2f, height / 2.4f + 24f * density, hintPaint)
+        }
+    }
+
+    override fun computeScroll() {
+        if (scroller.computeScrollOffset()) {
+            offsetX = scroller.currX.toFloat()
+            offsetY = scroller.currY.toFloat()
+            postInvalidateOnAnimation()
         }
     }
 
@@ -164,30 +200,75 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
         canvas.drawPath(path, inkPaint)
     }
 
+    private fun rowsOf(a: Annotation): List<Annotation.Row> {
+        a.rows?.let { return it }
+        answerPaint.textSize = a.textSize
+        val color = if (a.muted) colors.muted else colors.accent
+        val fm = answerPaint.fontMetrics
+        val rows = a.lines.indices.map { i ->
+            val d = a.tex?.getOrNull(i)?.let { MathRender.drawable(it, a.textSize, color) }
+            if (d != null) {
+                Annotation.Row(d, null, d.intrinsicWidth.toFloat(), d.intrinsicHeight.toFloat())
+            } else {
+                Annotation.Row(null, a.lines[i], answerPaint.measureText(a.lines[i]), fm.descent - fm.ascent)
+            }
+        }
+        a.rows = rows
+        return rows
+    }
+
     private fun drawAnnotation(canvas: Canvas, a: Annotation) {
+        val rows = rowsOf(a)
+        val gap = a.textSize * 0.15f
+        val total = rows.sumOf { it.h.toDouble() }.toFloat() + gap * (rows.size - 1).coerceAtLeast(0)
+        val maxW = rows.maxOfOrNull { it.w } ?: 0f
+        // to the right of the item, unless that runs past the first screen width while the space below is free
+        var left = a.x
+        var top = a.centerY - total / 2
+        if (width > 0 && a.x + maxW > width - 8 * density && maxW < width - 16 * density &&
+            isFree(a.belowX, a.belowY, maxW, total)
+        ) {
+            left = a.belowX
+            top = a.belowY
+        }
         answerPaint.textSize = a.textSize
         answerPaint.color = if (a.muted) colors.muted else colors.accent
-        val lineH = a.textSize * 1.15f
-        val total = lineH * a.lines.size
-        var baseline = a.centerY - total / 2 + a.textSize * 0.8f
-        var maxW = 0f
-        for (line in a.lines) {
-            canvas.drawText(line, a.x, baseline, answerPaint)
-            maxW = max(maxW, answerPaint.measureText(line))
-            baseline += lineH
+        val fm = answerPaint.fontMetrics
+        var y = top
+        for (r in rows) {
+            val d = r.drawable
+            if (d != null) {
+                canvas.save()
+                canvas.translate(left, y)
+                d.setBounds(0, 0, r.w.toInt(), r.h.toInt())
+                d.draw(canvas)
+                canvas.restore()
+            } else if (r.text != null) {
+                canvas.drawText(r.text, left, y - fm.ascent, answerPaint)
+            }
+            y += r.h + gap
         }
-        a.hitRect.set(a.x - 8 * density, a.centerY - total / 2 - 8 * density, a.x + maxW + 8 * density, a.centerY + total / 2 + 8 * density)
+        a.hitRect.set(left - 8 * density, top - 8 * density, left + maxW + 8 * density, top + total + 8 * density)
+    }
+
+    /** True when no ink lies in the given page rectangle. */
+    private fun isFree(left: Float, top: Float, w: Float, h: Float): Boolean {
+        val r = RectF(left, top, left + w, top + h)
+        return synchronized(strokes) { strokes.none { RectF.intersects(it.bounds, r) } }
     }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
-        val x = e.x
+        val x = e.x + offsetX
         val y = e.y + offsetY
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 parent?.requestDisallowInterceptTouchEvent(true)
+                scroller.forceFinished(true)
                 panning = false
                 downTime = e.eventTime
+                velocity?.recycle()
+                velocity = VelocityTracker.obtain().also { it.addMovement(e) }
                 if (eraser) {
                     pushUndo()
                     eraseAt(x, y)
@@ -197,31 +278,42 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
                 invalidate()
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
-                // second finger: scrolling, drop the stroke that was just started
+                // second finger: move the sheet, drop the stroke that was just started
                 current = null
                 panning = true
-                lastPanY = avgY(e)
+                lastPanX = avg(e, true)
+                lastPanY = avg(e, false)
+                velocity?.addMovement(e)
                 invalidate()
             }
             MotionEvent.ACTION_MOVE -> {
+                velocity?.addMovement(e)
                 if (panning) {
-                    val ay = avgY(e)
-                    offsetY = max(0f, offsetY - (ay - lastPanY))
+                    val ax = avg(e, true)
+                    val ay = avg(e, false)
+                    offsetX -= ax - lastPanX
+                    offsetY -= ay - lastPanY
+                    lastPanX = ax
                     lastPanY = ay
                     invalidate()
                 } else if (eraser) {
-                    for (h in 0 until e.historySize) eraseAt(e.getHistoricalX(h), e.getHistoricalY(h) + offsetY)
+                    for (h in 0 until e.historySize) eraseAt(e.getHistoricalX(h) + offsetX, e.getHistoricalY(h) + offsetY)
                     eraseAt(x, y)
                 } else {
                     current?.let { s ->
-                        for (h in 0 until e.historySize) s.add(e.getHistoricalX(h), e.getHistoricalY(h) + offsetY)
+                        for (h in 0 until e.historySize) s.add(e.getHistoricalX(h) + offsetX, e.getHistoricalY(h) + offsetY)
                         s.add(x, y)
                         invalidate()
                     }
                 }
             }
             MotionEvent.ACTION_POINTER_UP -> {
-                if (panning) lastPanY = avgY(e, e.actionIndex)
+                if (panning) {
+                    velocity?.addMovement(e)
+                    if (e.pointerCount == 2) fling(e)
+                    lastPanX = avg(e, true, e.actionIndex)
+                    lastPanY = avg(e, false, e.actionIndex)
+                }
             }
             MotionEvent.ACTION_UP -> {
                 val s = current
@@ -241,23 +333,46 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
                     listener?.onInkChanged()
                 }
                 panning = false
+                velocity?.recycle()
+                velocity = null
                 invalidate()
             }
             MotionEvent.ACTION_CANCEL -> {
                 current = null
                 panning = false
+                velocity?.recycle()
+                velocity = null
                 invalidate()
             }
         }
         return true
     }
 
-    private fun avgY(e: MotionEvent, skip: Int = -1): Float {
+    /** Keep the sheet moving after a quick two-finger swipe. */
+    private fun fling(e: MotionEvent) {
+        val v = velocity ?: return
+        v.computeCurrentVelocity(1000, ViewConfiguration.get(context).scaledMaximumFlingVelocity.toFloat())
+        var vx = 0f
+        var vy = 0f
+        for (i in 0 until e.pointerCount) {
+            vx += v.getXVelocity(e.getPointerId(i))
+            vy += v.getYVelocity(e.getPointerId(i))
+        }
+        vx /= e.pointerCount
+        vy /= e.pointerCount
+        val minV = ViewConfiguration.get(context).scaledMinimumFlingVelocity
+        if (abs(vx) < minV && abs(vy) < minV) return
+        val far = 10_000_000
+        scroller.fling(offsetX.toInt(), offsetY.toInt(), -vx.toInt(), -vy.toInt(), -far, far, -far, far)
+        postInvalidateOnAnimation()
+    }
+
+    private fun avg(e: MotionEvent, xAxis: Boolean, skip: Int = -1): Float {
         var sum = 0f
         var n = 0
         for (i in 0 until e.pointerCount) {
             if (i == skip) continue
-            sum += e.getY(i)
+            sum += if (xAxis) e.getX(i) else e.getY(i)
             n++
         }
         return if (n == 0) 0f else sum / n

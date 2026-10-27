@@ -78,9 +78,9 @@ def test_function_definition():
 
 
 def test_system():
-    out = ce.process_system(["x + y = 3", "x - y = 1"])
+    out = [ce.line_text(l) for l in ce.process_system(["x + y = 3", "x - y = 1"])]
     assert out == ["x = 2, y = 1"], out
-    out = ce.process_system(["x^2 + y^2 = 25", "x - y = 1"])
+    out = [ce.line_text(l) for l in ce.process_system(["x^2 + y^2 = 25", "x - y = 1"])]
     assert out == ["x = −3, y = −4", "x = 4, y = 3"], out
 
 
@@ -104,6 +104,57 @@ def test_document_json():
     assert out["f"]["answer"] == "−2", out["f"]
     assert out["g"]["answer"] == "4", out["g"]
     assert out["h"]["answer"] == "x = 2, y = 1", out["h"]
+
+
+def test_tex():
+    items = [
+        {"id": "a", "type": "line", "tokens": "\\frac { 1 } { 2 } + \\frac { 1 } { 3 } =".split()},
+        {"id": "b", "type": "line", "tokens": "x ^ { 2 } - 2 = 0".split()},
+        {"id": "c", "type": "system", "lines": ["x + y = 3".split(), "x - y = 1".split()]},
+        {"id": "d", "type": "line", "tokens": "\\sqrt [ 3 ] { 2 7 } =".split()},
+        {"id": "e", "type": "line", "tokens": "2 + 2 = 5".split()},
+        {"id": "f", "type": "text", "text": "x^2 > 4"},
+    ]
+    out = {o["id"]: o for o in json.loads(ce.evaluate_document(json.dumps(items)))}
+    assert out["a"]["input_tex"] == "\\frac{1}{2} + \\frac{1}{3} =", out["a"]
+    assert out["a"]["tex"] == ["\\frac{5}{6} \\approx 0.83333333"], out["a"]
+    assert out["b"]["tex"] == ["{x}_{1} = - \\sqrt{2} \\approx -1.4142136", "{x}_{2} = \\sqrt{2} \\approx 1.4142136"], out["b"]
+    assert out["c"]["input_tex"] == "\\begin{cases}x + y = 3\\\\x - y = 1\\end{cases}", out["c"]
+    assert out["c"]["tex"] == ["x = 2,\\quad y = 1"], out["c"]
+    assert out["d"]["input_tex"] == "\\sqrt[3]{27} =", out["d"]
+    assert out["e"]["tex"] is None and out["e"]["answer"].startswith("✗"), out["e"]
+    assert out["f"]["tex"] == ["x < -2\\ \\text{или}\\ x > 2"], out["f"]
+
+
+def test_candidates():
+    def line(best, *alts):
+        return {"id": "l", "type": "line", "tokens": best.split(), "alts": [a.split() for a in alts]}
+
+    def run(item):
+        return json.loads(ce.evaluate_document(json.dumps([item])))[0]
+
+    # × read as the letter x between numbers
+    r = run(line("2 x 3 ="))
+    assert r["answer"] == "6", r
+    # 4 read as y in a value request
+    r = run(line("2 + y ="))
+    assert r["answer"] == "6", r
+    # expressions with powers keep their letters (factorisation was asked for)
+    r = run(line("y ^ { 2 } - 1 ="))
+    assert r["answer"] == "(y + 1)(y − 1)", r
+    # but a real equation keeps its letters
+    r = run(line("2 y = 8"))
+    assert r["answer"] == "y = 4", r
+    # a × with nothing on one side is the letter x
+    r = run(line("2 \\times + 3 = 7"))
+    assert r["answer"] == "x = 2", r
+    # unparsable best reading: the next candidate is used
+    r = run(line("2 + ( =", "2 + 2 ="))
+    assert r["answer"] == "4" and r["input"] == "2 + 2 =", r
+    # system lines choose readings that are equations
+    r = run({"id": "s", "type": "system", "lines": [
+        {"tokens": "x + y 5".split(), "alts": ["x + y = 5".split()]}, "x - y = 1".split()]})
+    assert r["answer"] == "x = 3, y = 2", r
 
 
 def test_plot():

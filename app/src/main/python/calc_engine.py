@@ -18,6 +18,7 @@ import re
 
 import sympy as sp
 from sympy.core.relational import Relational
+from sympy.printing.latex import LatexPrinter
 from sympy.parsing.sympy_parser import (
     convert_xor,
     implicit_multiplication_application,
@@ -706,6 +707,174 @@ def _func_arg(a):
 
 
 # ---------------------------------------------------------------------------
+# LaTeX for typeset display (rendered with JLatexMath on Android)
+# ---------------------------------------------------------------------------
+# An answer line is a list of pieces; every piece is a (text, tex) pair, so the
+# same line can be shown as compact Unicode text and as typeset math.
+
+TEX_REL = {"=": "=", "≈": r"\approx", "<": "<", ">": ">", "≤": r"\leq", "≥": r"\geq", "≠": r"\neq",
+           "<=": r"\leq", ">=": r"\geq", "!=": r"\neq"}
+TEX_FUNCS = [(r"\tan", r"\operatorname{tg}"), (r"\cot", r"\operatorname{ctg}"),
+             (r"\operatorname{atan}", r"\operatorname{arctg}"), (r"\arctan", r"\operatorname{arctg}"),
+             (r"\operatorname{acot}", r"\operatorname{arcctg}"), (r"\operatorname{acos}", r"\arccos"),
+             (r"\operatorname{asin}", r"\arcsin")]
+
+
+def to_tex(e):
+    if isinstance(e, (list, tuple)):
+        return ",\\ ".join(to_tex(x) for x in e)
+    if e is sp.true:
+        return r"\text{верно}"
+    if e is sp.false:
+        return r"\text{неверно}"
+    if e is sp.S.ComplexInfinity or e is sp.S.NaN:
+        return r"\text{не определено}"
+    if isinstance(e, sp.Float):
+        return num_tex(e)
+    if isinstance(e, sp.And):
+        return r"\ \text{и}\ ".join(to_tex(a) for a in _ordered(e.args))
+    if isinstance(e, sp.Or):
+        return r"\ \text{или}\ ".join(to_tex(a) for a in _ordered(e.args))
+    return _russian_funcs(sp.latex(e, ln_notation=True, inv_trig_style="full", fold_func_brackets=True))
+
+
+def _russian_funcs(s):
+    for a, b in TEX_FUNCS:
+        s = s.replace(a, b)
+    return s
+
+
+class _AsWrittenPrinter(LatexPrinter):
+    """LaTeX of an unevaluated expression that keeps the written order and shows a/b as a fraction."""
+
+    def _print_Mul(self, expr):
+        args = list(expr.args)
+        den = [a for a in args if isinstance(a, sp.Pow) and a.exp == -1]
+        if not den:
+            args = [a for a in args if a != 1] or [sp.S.One]
+            if len(args) == 1:
+                return self._print(args[0])
+            return super()._print_Mul(sp.Mul(*args, evaluate=False))
+        num = [a for a in args if not (isinstance(a, sp.Pow) and a.exp == -1) and a != 1]
+        n = self._print(sp.Mul(*num, evaluate=False)) if len(num) > 1 else (self._print(num[0]) if num else "1")
+        bases = [d.base for d in den]
+        d = self._print(sp.Mul(*bases, evaluate=False)) if len(bases) > 1 else self._print(bases[0])
+        return r"\frac{%s}{%s}" % (n, d)
+
+
+_AS_WRITTEN = _AsWrittenPrinter({"order": "none", "ln_notation": True, "inv_trig_style": "full",
+                                 "fold_func_brackets": True})
+
+
+def num_tex(x, digits=10):
+    s = fmt_number(x, digits).replace("−", "-")
+    if "·10" in s:
+        mant, exp = s.split("·10")
+        return r"%s \cdot 10^{%s}" % (mant, exp.translate(SUPERSCRIPTS))
+    return s
+
+
+def X(e):
+    """A SymPy object."""
+    return (fmt(e), to_tex(e))
+
+
+def W(words):
+    """Words (Russian text)."""
+    return (words, r"\text{%s}" % words)
+
+
+def O(op):
+    """A relation sign with spaces around it."""
+    return (" %s " % op, " %s " % TEX_REL[op])
+
+
+def NUM(x, digits=10):
+    return (fmt_number(x, digits), num_tex(x, digits))
+
+
+def ANY(var):
+    """'x — любое'."""
+    return [X(var), (" — любое", r" \in \mathbb{R}")]
+
+
+def line_text(line):
+    return "".join(p[0] for p in line)
+
+
+def line_tex(line):
+    return "".join(p[1] for p in line)
+
+
+class _LogBase(sp.Function):
+    """log_b(x) kept unevaluated for display."""
+    nargs = 2
+
+    def _latex(self, printer):
+        return r"\log_{%s}{%s}" % (printer._print(self.args[1]), printer._print(self.args[0]))
+
+
+def _display_log(x, b=None, **_):
+    return sp.log(x, evaluate=False) if b is None else _LogBase(x, b)
+
+
+def _display_limit(e, x, x0, *rest, **_):
+    # a two-sided limit is printed without the "0⁺" direction mark
+    return sp.Limit(e, x, x0, dir="+-") if sp.sympify(x0).is_finite else sp.Limit(e, x, x0)
+
+
+def _display_root(a, n, **_):
+    n = sp.sympify(n)
+    return sp.Pow(a, sp.Rational(1, n) if n.is_Integer else sp.Pow(n, -1, evaluate=False), evaluate=False)
+
+
+def _display_locals():
+    d = dict(LOCALS)
+    d.update({
+        "integrate": sp.Integral, "int": sp.Integral,
+        "limit": _display_limit, "lim": _display_limit,
+        "diff": sp.Derivative, "summation": sp.Sum,
+        "log": _display_log, "ln": _display_log, "lg": lambda x, **_: _LogBase(x, 10),
+        "root": _display_root,
+        "factorial": lambda n, **_: sp.factorial(n, evaluate=False),
+        "det": lambda m, **_: sp.Determinant(sp.ImmutableMatrix(m)),
+        "inv": lambda m, **_: sp.Inverse(sp.ImmutableMatrix(m)),
+    })
+    return d
+
+
+DISPLAY_LOCALS = _display_locals()
+
+
+def expr_tex(text):
+    """Typeset form of linear text as written (nothing is computed)."""
+    e = parse_expr(normalize_text(text), local_dict=DISPLAY_LOCALS, transformations=TRANSFORMS, evaluate=False)
+    return _russian_funcs(_AS_WRITTEN.doprint(e))
+
+
+def text_to_tex(text):
+    """'2x+1=7' -> '2 x + 1 = 7' in LaTeX; None when the text cannot be parsed."""
+    try:
+        pieces, ops = split_relation(text)
+        out = []
+        for k, piece in enumerate(pieces):
+            if piece.strip():
+                out.append(expr_tex(piece))
+            if k < len(ops):
+                out.append(" %s " % TEX_REL.get(ops[k], ops[k]))
+        return "".join(out).strip() or None
+    except Exception:  # noqa: BLE001 - display only
+        return None
+
+
+def system_tex(texts):
+    lines = [text_to_tex(t) for t in texts]
+    if any(t is None for t in lines):
+        return None
+    return r"\begin{cases}" + r"\\".join(lines) + r"\end{cases}"
+
+
+# ---------------------------------------------------------------------------
 # Evaluation
 # ---------------------------------------------------------------------------
 
@@ -724,39 +893,44 @@ def has_float(text):
     return re.search(r"\d\.\d", text) is not None
 
 
-def value_text(expr, decimal_only=False):
-    """Exact value plus a decimal approximation when it helps."""
+def value_line(expr, decimal_only=False):
+    """Exact value plus a decimal approximation when it helps (an answer line)."""
     if isinstance(expr, sp.MatrixBase):
-        return fmt(expr)
+        return [X(expr)]
     if expr.is_number and not expr.free_symbols:
         if expr.has(sp.zoo, sp.nan):
-            return "не определено"
+            return [W("не определено")]
         if expr in (sp.oo, -sp.oo):
-            return fmt(expr)
+            return [X(expr)]
         try:
             approx = sp.N(expr, 15)
         except Exception:  # noqa: BLE001
             approx = None
         is_real = approx is not None and approx.is_real
         if decimal_only and is_real:
-            return fmt_number(approx)
+            return [NUM(approx)]
         if expr.is_Integer:
-            return fmt(expr)
+            return [X(expr)]
         if isinstance(expr, sp.Float):
-            return fmt_number(expr)
+            return [NUM(expr)]
         exact = fmt(expr)
         if is_real:
-            dec = fmt_number(approx, 8)
+            dec = NUM(approx, 8)
             if len(exact) > 24:
-                return "≈ " + dec
+                return [("≈ ", r"\approx "), dec]
             if isinstance(expr, sp.Rational) and _is_finite_decimal(expr):
-                return "%s = %s" % (exact, fmt_number(approx, 12))
-            return "%s ≈ %s" % (exact, dec)
+                return [X(expr), O("="), NUM(approx, 12)]
+            return [X(expr), O("≈"), dec]
         if approx is not None and approx.is_complex and len(exact) > 24:
             re_, im_ = approx.as_real_imag()
-            return "≈ %s %s %si" % (fmt_number(re_, 6), "−" if im_ < 0 else "+", fmt_number(abs(im_), 6))
-        return exact
-    return fmt(expr)
+            sign = (" − ", " - ") if im_ < 0 else (" + ", " + ")
+            return [("≈ ", r"\approx "), NUM(re_, 6), sign, NUM(abs(im_), 6), ("i", "i")]
+        return [X(expr)]
+    return [X(expr)]
+
+
+def value_text(expr, decimal_only=False):
+    return line_text(value_line(expr, decimal_only))
 
 
 def _is_finite_decimal(r):
@@ -778,6 +952,7 @@ def simplify_value(expr):
 
 
 def solve_equation(eq, decimal):
+    """Answer lines, one per root."""
     symbols = order_vars(eq.free_symbols)
     var = symbols[0]
     sols = sp.solve(eq, var, dict=False)
@@ -785,19 +960,19 @@ def solve_equation(eq, decimal):
         # identity?
         diff = sp.simplify(eq.lhs - eq.rhs)
         if diff == 0:
-            return "%s — любое" % fmt(var)
-        return "нет решений"
+            return [ANY(var)]
+        return [[W("нет решений")]]
     real = [s for s in sols if s.is_real is not False]
     if real:
         sols = real
     sols = _sort_solutions(sols)
-    name = fmt(var)
     if len(sols) == 1:
-        return "%s = %s" % (name, value_text(sols[0], decimal))
-    parts = []
+        return [[X(var), O("=")] + value_line(sols[0], decimal)]
+    lines = []
     for k, s in enumerate(sols, 1):
-        parts.append("%s%s = %s" % (name, str(k).translate(SUB), value_text(s, decimal)))
-    return "; ".join(parts)
+        name = (fmt(var) + str(k).translate(SUB), "{%s}_{%d}" % (to_tex(var), k))
+        lines.append([name, O("=")] + value_line(s, decimal))
+    return lines
 
 
 def _sort_solutions(sols):
@@ -817,9 +992,9 @@ def solve_inequality(rel):
     var = symbols[0]
     res = sp.reduce_inequalities(rel, var)
     if res is sp.true:
-        return "%s — любое" % fmt(var)
+        return ANY(var)
     if res is sp.false:
-        return "нет решений"
+        return [W("нет решений")]
     return fmt_ineq(_clean_ineq(res, var), var)
 
 
@@ -845,13 +1020,19 @@ def fmt_ineq(res, var):
             lop = ">" if isinstance(lo[0], sp.StrictGreaterThan) else "≥"
             hop = "<" if isinstance(hi[0], sp.StrictLessThan) else "≤"
             lop = "<" if lop == ">" else "≤"
-            return "%s %s %s %s %s" % (fmt(lo[0].rhs), lop, fmt(var), hop, fmt(hi[0].rhs))
+            return [X(lo[0].rhs), O(lop), X(var), O(hop), X(hi[0].rhs)]
     if isinstance(res, sp.Or):
-        return " или ".join(fmt_ineq(a, var) for a in _ordered(res.args))
-    return fmt(res)
+        out = []
+        for k, a in enumerate(_ordered(res.args)):
+            if k:
+                out.append((" или ", r"\ \text{или}\ "))
+            out.extend(fmt_ineq(a, var))
+        return out
+    return [X(res)]
 
 
 def solve_system(eqs, decimal):
+    """Answer lines, one per solution."""
     rels = [e for e in eqs if not isinstance(e, sp.Equality)]
     if rels:
         symbols = order_vars(set().union(*[e.free_symbols for e in eqs]))
@@ -859,24 +1040,26 @@ def solve_system(eqs, decimal):
             raise CalcError("система неравенств должна содержать одну переменную")
         res = sp.reduce_inequalities(eqs, symbols[0])
         if res is sp.false:
-            return ["нет решений"]
+            return [[W("нет решений")]]
         return [fmt_ineq(_clean_ineq(res, symbols[0]), symbols[0])]
     symbols = order_vars(set().union(*[e.free_symbols for e in eqs]))
     if not symbols:
         raise CalcError("в системе нет переменных")
     sols = sp.solve(eqs, symbols, dict=True)
     if not sols:
-        return ["нет решений"]
+        return [[W("нет решений")]]
     real = [s for s in sols if all(v.is_real is not False for v in s.values())]
     if real:
         sols = real
     lines = []
     for s in sols:
-        parts = []
+        line = []
         for v in symbols:
             if v in s:
-                parts.append("%s = %s" % (fmt(v), value_text(s[v], decimal)))
-        lines.append(", ".join(parts) if parts else "любые значения")
+                if line:
+                    line.append((", ", r",\quad "))
+                line += [X(v), O("=")] + value_line(s[v], decimal)
+        lines.append(line or [W("любые значения")])
     return lines
 
 
@@ -885,11 +1068,11 @@ def is_function_definition(lhs, rhs):
 
 
 def evaluate_trailing(lhs_text, forced):
-    """Value of the left part of `expr =`."""
+    """Value of the left part of `expr =` as an answer line (or None), and the plot text."""
     decimal = has_float(lhs_text)
     raw = parse(lhs_text)
     if isinstance(raw, sp.MatrixBase):
-        return value_text(raw.applyfunc(sp.simplify)), None
+        return value_line(raw.applyfunc(sp.simplify)), None
     result = simplify_value(raw)
     plot = None
     if result.free_symbols:
@@ -906,66 +1089,76 @@ def evaluate_trailing(lhs_text, forced):
         if same or (result == raw and not calls):
             alt = sp.expand(result)
             if alt != result:
-                return fmt(alt), plot
+                return [X(alt)], plot
             alt = sp.factor(result)
             if alt != result:
-                return fmt(alt), plot
+                return [X(alt)], plot
             if not forced:
                 return None, plot
-        return fmt(result), plot
+        return [X(result)], plot
     if re.fullmatch(r"\s*-?\s*\d+(\.\d+)?\s*", lhs_text) and not forced:
         return None, None
-    return value_text(result, decimal), None
+    return value_line(result, decimal), None
+
+
+def answer(kind, lines=None, plot=None, sep="; "):
+    """Result dict: `answer` is Unicode text (lines joined by `sep`), `tex` the typeset lines."""
+    if not lines:
+        return {"kind": kind, "answer": None, "tex": None, "plot": plot}
+    # ✓ / ✗ marks read better as handwriting than as typeset symbols
+    tex = None if kind == "check" else [line_tex(l) for l in lines]
+    return {"kind": kind, "answer": sep.join(line_text(l) for l in lines), "tex": tex, "plot": plot}
 
 
 def process(text, forced=False):
     """Process one statement (one line) of linear text.
 
-    Returns a dict: kind (value|solve|check|inequality|function|none), answer, plot.
+    Returns a dict: kind (value|solve|check|inequality|function|none), answer, tex, plot.
     `forced` means the user explicitly asked for a result (keyboard '=' key).
     """
     text = text.strip()
     pieces, ops = split_relation(text)
     if not ops:
         if forced:
-            answer, plot = evaluate_trailing(text, True)
-            return {"kind": "value", "answer": answer, "plot": plot}
-        return {"kind": "none", "answer": None, "plot": None}
+            line, plot = evaluate_trailing(text, True)
+            return answer("value", [line] if line else None, plot)
+        return answer("none")
     if len(ops) > 1:
         raise CalcError("слишком много знаков сравнения")
     lhs_text, rhs_text = pieces[0].strip(), pieces[1].strip()
     op = ops[0]
     if not lhs_text:
-        return {"kind": "none", "answer": None, "plot": None}
+        return answer("none")
     if not rhs_text:
         if op != "=":
-            return {"kind": "none", "answer": None, "plot": None}
-        answer, plot = evaluate_trailing(lhs_text, forced)
-        return {"kind": "value" if answer else "none", "answer": answer, "plot": plot}
+            return answer("none")
+        line, plot = evaluate_trailing(lhs_text, forced)
+        return answer("value" if line else "none", [line] if line else None, plot)
 
     decimal = has_float(text)
     lhs, rhs = parse(lhs_text), parse(rhs_text)
     if op == "=":
         if is_function_definition(lhs, rhs) and not isinstance(rhs, sp.MatrixBase):
-            return {"kind": "function", "answer": None, "plot": rhs_text}
+            return answer("function", plot=rhs_text)
         eq = sp.Eq(lhs, rhs, evaluate=False)
         symbols = eq.free_symbols
         if not symbols:
             ok = sp.simplify(lhs - rhs) == 0
             if ok:
-                return {"kind": "check", "answer": "✓", "plot": None}
-            return {"kind": "check", "answer": "✗  (= %s)" % value_text(sp.simplify(lhs), decimal), "plot": None}
-        return {"kind": "solve", "answer": solve_equation(eq, decimal), "plot": None}
+                return answer("check", [[("✓", "")]])
+            return answer("check", [[("✗  (= ", "")] + value_line(sp.simplify(lhs), decimal) + [(")", "")]])
+        return answer("solve", solve_equation(eq, decimal))
     rel = {"<": sp.Lt, ">": sp.Gt, "<=": sp.Le, ">=": sp.Ge, "!=": sp.Ne}[op](lhs, rhs, evaluate=False)
     if not rel.free_symbols:
         val = bool(sp.simplify({"<": lhs < rhs, ">": lhs > rhs, "<=": lhs <= rhs, ">=": lhs >= rhs}.get(op, sp.Ne(lhs, rhs))))
-        return {"kind": "check", "answer": "✓" if val else "✗", "plot": None}
+        return answer("check", [[("✓", "")]] if val else [[("✗", "")]])
     if op == "!=":
-        return {"kind": "none", "answer": None, "plot": None}
-    return {"kind": "inequality", "answer": solve_inequality(rel), "plot": None}
+        return answer("none")
+    return answer("inequality", [solve_inequality(rel)])
 
 
 def process_system(texts):
+    """Answer lines of a system written one equation per line."""
     eqs = []
     for t in texts:
         pieces, ops = split_relation(t)
@@ -1010,31 +1203,177 @@ def _safe(fn):
         return {"error": "не удалось вычислить (%s)" % type(ex).__name__}
 
 
+# ---------------------------------------------------------------------------
+# Choosing among recognition candidates
+# ---------------------------------------------------------------------------
+
+# handwritten letters that are easily read instead of digits
+DIGIT_LOOKALIKES = {"y": "4", "z": "2", "l": "1", "I": "1", "o": "0", "O": "0", "s": "5", "S": "5",
+                    "g": "9", "q": "9", "b": "6", "B": "8"}
+_EDGE = set(BINOPS) | set(RELOPS) | {"(", "{", "[", "^", "_", ","}
+
+
+def fix_times(toks):
+    """A '×' with no operand on one side was a letter x: '2 × + 3 = 7' -> '2 x + 3 = 7'."""
+    out = list(toks)
+    for i, t in enumerate(out):
+        if t == "\\times":
+            prev = out[i - 1] if i else None
+            nxt = out[i + 1] if i + 1 < len(out) else None
+            if prev is None or prev in _EDGE or nxt is None or nxt in _EDGE or nxt in (")", "}", "]"):
+                out[i] = "x"
+    return out
+
+
+def numeric_variant(toks):
+    """For 'expr =': x between numbers is ×, letters that look like digits are digits. None if nothing changes."""
+    out = list(toks)
+    changed = False
+    # letters are only swapped for digits in plain arithmetic: "y^2 - 1 =" or "sin(y) =" keep their letters
+    plain = not any(t in ("^", "(", "\\frac", "\\sqrt") or (t.startswith("\\") and t not in ("\\times", "\\cdot", "\\div"))
+                    for t in toks)
+    for i, t in enumerate(out):
+        prev = out[i - 1] if i else None
+        nxt = out[i + 1] if i + 1 < len(out) else None
+        if t == "x" and prev is not None and nxt is not None and \
+                (prev.isdigit() or prev in (")", "}")) and (nxt.isdigit() or nxt in ("(", "\\frac", "\\sqrt")):
+            out[i] = "\\times"
+            changed = True
+        elif plain and t in DIGIT_LOOKALIKES:
+            out[i] = DIGIT_LOOKALIKES[t]
+            changed = True
+    return out if changed else None
+
+
+def _is_value_request(text):
+    pieces, ops = split_relation(text)
+    return ops == ["="] and not pieces[1].strip()
+
+
+def _has_symbols(text):
+    try:
+        return bool(parse(split_relation(text)[0][0]).free_symbols)
+    except CalcError:
+        return True
+
+
+def _valid(text):
+    """Balanced brackets and every part between relation signs parses."""
+    depth = 0
+    for ch in text:
+        depth += ch in "([{"
+        depth -= ch in ")]}"
+        if depth < 0:
+            return False
+    if depth:
+        return False
+    pieces, _ = split_relation(text)
+    try:
+        for p in pieces:
+            if p.strip():
+                parse(p)
+    except CalcError:
+        return False
+    return True
+
+
+def evaluate_line(candidates, forced=False):
+    """Evaluate the first reading that makes sense. Returns (text, result dict)."""
+    first_error = None
+    for toks in candidates[:6]:
+        toks = fix_times(toks)
+        try:
+            text = tokens_to_text(toks)
+            if not _valid(text):
+                raise CalcError("не удалось разобрать: %s" % text)
+            res = process(text, forced=forced)
+        except CalcError as ex:
+            if first_error is None:
+                first_error = (" ".join(toks), {"error": str(ex)})
+            continue
+        except Exception as ex:  # noqa: BLE001
+            if first_error is None:
+                first_error = (" ".join(toks), {"error": "не удалось вычислить (%s)" % type(ex).__name__})
+            continue
+        # "2 x 3 =" or "2 + y =": a value was asked for, so a reading without letters is meant
+        if _is_value_request(text) and _has_symbols(text):
+            alt = numeric_variant(toks)
+            if alt is not None:
+                try:
+                    alt_text = tokens_to_text(alt)
+                    if not _has_symbols(alt_text):
+                        return alt_text, process(alt_text, forced=forced)
+                except Exception:  # noqa: BLE001
+                    pass
+        return text, res
+    if first_error is not None:
+        return first_error
+    return "", answer("none")
+
+
+def _line_candidates(entry):
+    """A line entry: text, a token list, or {"tokens": [...], "alts": [[...], ...]}."""
+    if isinstance(entry, dict):
+        return [entry.get("tokens") or []] + list(entry.get("alts") or [])
+    return [entry]
+
+
+def system_line_text(entry):
+    """Text of one line of a system: the first reading that is a single parsable relation."""
+    cands = _line_candidates(entry)
+    if isinstance(cands[0], str):
+        return cands[0]
+    first = None
+    for toks in cands[:6]:
+        try:
+            text = tokens_to_text(fix_times(toks))
+        except CalcError:
+            continue
+        if first is None:
+            first = text
+        pieces, ops = split_relation(text)
+        if len(ops) == 1 and pieces[0].strip() and pieces[1].strip():
+            try:
+                parse(pieces[0])
+                parse(pieces[1])
+                return text
+            except CalcError:
+                continue
+    return first if first is not None else tokens_to_text(cands[0])
+
+
 def evaluate_item(item):
-    """item: {id, type: line|system|text, tokens | lines | text, forced}"""
+    """item: {id, type: line|system|text, tokens (+ alts) | lines | text, forced}.
+
+    The result has `input` (linear text), `input_tex`, `kind`, `answer`, `tex`, `plot` or `error`.
+    """
     kind = item.get("type", "line")
     out = {"id": item.get("id")}
     if kind == "line":
         def run():
-            text = tokens_to_text(item["tokens"])
+            text, res = evaluate_line(_line_candidates({"tokens": item["tokens"], "alts": item.get("alts")}),
+                                      forced=item.get("forced", False))
             out["input"] = text
-            res = process(text, forced=item.get("forced", False))
+            out["input_tex"] = text_to_tex(text) if "error" not in res else None
             return res
     elif kind == "system":
         def run():
-            texts = [toks if isinstance(toks, str) else tokens_to_text(toks) for toks in item["lines"]]
+            texts = [system_line_text(entry) for entry in item["lines"]]
             out["input"] = "; ".join(texts)
             complete = [t for t in texts if t.strip()]
+            out["input_tex"] = system_tex(complete)
             if len(complete) < 2:
-                return {"kind": "none", "answer": None}
-            return {"kind": "system", "answer": "\n".join(process_system(complete))}
+                return answer("none")
+            return answer("system", process_system(complete), sep="\n")
     else:
         def run():
             text = item["text"]
             out["input"] = text
             parts = statements(text)
             if len(parts) > 1:
-                return {"kind": "system", "answer": "\n".join(process_system(parts))}
+                out["input_tex"] = system_tex(parts)
+                return answer("system", process_system(parts), sep="\n")
+            out["input_tex"] = text_to_tex(parts[0]) if parts else None
             return process(parts[0] if parts else "", forced=item.get("forced", True))
     res = _safe(run)
     out.update(res)

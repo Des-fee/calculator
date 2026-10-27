@@ -37,10 +37,26 @@ class Recognizer(context: Context) {
         vocab = assets.open("model/vocab.txt").bufferedReader().readLines().map { it.trim() }
     }
 
-    fun recognize(line: InkLine, beam: Int = 5, maxLen: Int = 100): List<String> {
-        val img = render(line)
-        val feat = encode(img)
-        return beamSearch(feat, beam, maxLen)
+    /** Best reading of a line (see [candidates]). */
+    fun recognize(line: InkLine): List<String> = candidates(line).firstOrNull() ?: emptyList()
+
+    /**
+     * Several readings of a line, most likely first: the model's beam-search hypotheses re-ranked by how
+     * well they agree with the geometry of the ink (raised exponents, dots, fraction bars, trailing "=").
+     */
+    fun candidates(line: InkLine, beam: Int = 6, maxLen: Int = 100): List<List<String>> {
+        // a trailing "=" is cut off before recognition: the model was trained on CROHME, where formulas
+        // almost never end with "=", and tends to drop it
+        val eq = InkGeometry.trailingEquals(line)
+        val body = if (eq != null) line.strokes.filter { it !in eq } else line.strokes
+        if (body.isEmpty()) return listOf(listOf("="))
+        val bodyLine = if (eq != null) InkLine(body) else line
+        val hyps = beamSearch(encode(render(bodyLine)), beam, maxLen)
+        val geom = InkGeometry.of(bodyLine)
+        return InkGeometry.rank(hyps, geom).map { toks ->
+            val fixed = InkGeometry.fixDots(toks, geom)
+            if (eq != null && fixed.lastOrNull() != "=") fixed + "=" else fixed
+        }.distinct()
     }
 
     class Image(val w: Int, val h: Int, val data: FloatArray)
@@ -127,8 +143,8 @@ class Recognizer(context: Context) {
 
     private class Hyp(val seq: IntArray, val score: Float)
 
-    /** Left-to-right beam search; mirrors beam_search() in model/export_onnx.py. */
-    private fun beamSearch(feat: Feature, beam: Int, maxLen: Int): List<String> {
+    /** Left-to-right beam search; mirrors beam_search() in model/export_onnx.py. Best hypothesis first. */
+    private fun beamSearch(feat: Feature, beam: Int, maxLen: Int): List<List<String>> {
         var beams = listOf(Hyp(intArrayOf(SOS), 0f))
         val done = mutableListOf<Pair<IntArray, Float>>()
         for (step in 0 until maxLen) {
@@ -155,8 +171,9 @@ class Recognizer(context: Context) {
             if (bestDone != null && beams.all { it.score / it.seq.size < bestDone }) break
         }
         if (done.isEmpty()) beams.forEach { done.add(it.seq.copyOfRange(1, it.seq.size) to it.score / it.seq.size) }
-        val best = done.maxByOrNull { it.second } ?: return emptyList()
-        return best.first.map { vocab.getOrElse(it) { "" } }.filter { it.isNotEmpty() }
+        return done.sortedByDescending { it.second }
+            .map { h -> h.first.map { vocab.getOrElse(it) { "" } }.filter { it.isNotEmpty() } }
+            .distinct()
     }
 
     private fun topK(row: FloatArray, k: Int): IntArray {

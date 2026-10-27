@@ -36,8 +36,9 @@ import kotlin.math.min
 class MainActivity : Activity(), InkView.Listener {
     private lateinit var colors: Palette
     private lateinit var ink: InkView
-    private lateinit var inputView: TextView
-    private lateinit var answerView: TextView
+    private lateinit var inputLabel: TextView
+    private lateinit var inputView: MathView
+    private lateinit var answerView: MathView
     private lateinit var editButton: TextView
     private lateinit var graphButton: TextView
     private lateinit var eraserButton: TextView
@@ -51,7 +52,8 @@ class MainActivity : Activity(), InkView.Listener {
     private var loadError: String? = null
 
     private val version = AtomicInteger(0)
-    private val tokenCache = HashMap<String, List<String>>()
+    /** Recognition candidates per line (best first), by line key. */
+    private val tokenCache = HashMap<String, List<List<String>>>()
     private val overrides = HashMap<String, String>()
 
     /** Geometry and last result of each item on the page, by item id. */
@@ -78,6 +80,7 @@ class MainActivity : Activity(), InkView.Listener {
                 (if (android.os.Build.VERSION.SDK_INT >= 26) View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR else 0)
         }
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        MathRender.init(this)
         setContentView(buildLayout())
         setStatus(getString(R.string.loading), null)
         loadTestInk(intent)
@@ -189,25 +192,38 @@ class MainActivity : Activity(), InkView.Listener {
             orientation = LinearLayout.VERTICAL
             setPadding(dpi(16f), dpi(10f), dpi(16f), dpi(12f))
         }
-        inputView = TextView(this).apply {
-            textSize = 14f
+        inputLabel = TextView(this).apply {
+            textSize = 13f
             setTextColor(colors.muted)
-            setTextIsSelectable(true)
         }
-        answerView = TextView(this).apply {
-            textSize = 22f
-            setTextColor(colors.accent)
+        inputView = MathView(this).apply {
+            textSizePx = dp(17f)
+            color = colors.muted
+        }
+        answerView = MathView(this).apply {
+            textSizePx = dp(24f)
+            color = colors.accent
             typeface = Typeface.create("casual", Typeface.NORMAL)
-            setTextIsSelectable(true)
-            setPadding(0, dpi(2f), 0, dpi(4f))
+            setPadding(0, dpi(4f), 0, dpi(6f))
+        }
+        // long formulas scroll sideways instead of being cut
+        fun scrolled(v: View) = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(v)
         }
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         editButton = chip("✎ " + getString(R.string.fix)) { editFocused() }
         graphButton = chip("📈 " + getString(R.string.graph)) { openGraphForFocused() }
         actions.addView(editButton)
         actions.addView(graphButton)
-        panel.addView(inputView)
-        panel.addView(answerView)
+        val inputRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        inputRow.addView(inputLabel)
+        inputRow.addView(scrolled(inputView))
+        panel.addView(inputRow)
+        panel.addView(scrolled(answerView))
         panel.addView(actions)
 
         // keyboard input (hidden by default)
@@ -254,12 +270,14 @@ class MainActivity : Activity(), InkView.Listener {
 
     private fun showMenu(anchor: View) {
         val menu = PopupMenu(this, anchor)
-        menu.menu.add(0, 1, 0, getString(R.string.menu_update))
-        menu.menu.add(0, 2, 1, getString(R.string.menu_help))
+        menu.menu.add(0, 3, 0, getString(R.string.menu_home))
+        menu.menu.add(0, 1, 1, getString(R.string.menu_update))
+        menu.menu.add(0, 2, 2, getString(R.string.menu_help))
         menu.setOnMenuItemClickListener {
             when (it.itemId) {
                 1 -> startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(DOWNLOAD_URL)))
                 2 -> showHelp()
+                3 -> ink.scrollToStart()
             }
             true
         }
@@ -487,16 +505,20 @@ class MainActivity : Activity(), InkView.Listener {
         val json = JSONArray()
         val newItems = HashMap<String, Item>()
 
+        /** A corrected line as text, or {"tokens": best, "alts": [other readings]}. */
         fun lineJson(line: InkLine): Any {
             ov[line.key]?.let { return it }
-            val toks = tokenCache.getOrPut(line.key) {
+            val cands = tokenCache.getOrPut(line.key) {
                 try {
-                    rec.recognize(line)
+                    rec.candidates(line)
                 } catch (e: Exception) {
+                    android.util.Log.e(TAG, "recognition failed", e)
                     emptyList()
                 }
             }
-            return JSONArray(toks)
+            val alts = JSONArray()
+            for (c in cands.drop(1)) alts.put(JSONArray(c))
+            return JSONObject().put("tokens", JSONArray(cands.firstOrNull() ?: emptyList<String>())).put("alts", alts)
         }
 
         for (line in page.lines) {
@@ -504,7 +526,12 @@ class MainActivity : Activity(), InkView.Listener {
             newItems[id] = Item(id, line.key, line.bounds, line.charHeight)
             val o = JSONObject().put("id", id)
             val l = lineJson(line)
-            if (l is String) o.put("type", "text").put("text", l).put("forced", false) else o.put("type", "line").put("tokens", l)
+            if (l is String) {
+                o.put("type", "text").put("text", l).put("forced", false)
+            } else {
+                l as JSONObject
+                o.put("type", "line").put("tokens", l.getJSONArray("tokens")).put("alts", l.getJSONArray("alts"))
+            }
             json.put(o)
             if (v != version.get()) return
         }
@@ -550,7 +577,8 @@ class MainActivity : Activity(), InkView.Listener {
             val r = results[item.id] ?: continue
             val size = (item.charHeight * 0.9f).coerceIn(dp(18f), dp(56f))
             val x = item.bounds.right + max(item.charHeight * 0.3f, dp(8f))
-            val lines: List<String>
+            var lines: List<String>
+            var tex: List<String?>? = null
             var muted = false
             val ans = r.answer
             when {
@@ -564,11 +592,23 @@ class MainActivity : Activity(), InkView.Listener {
                     muted = true
                 }
                 ans == null -> continue
-                r.kind == "solve" || r.kind == "inequality" -> lines = ans.split("; ").mapIndexed { i, s -> if (i == 0) "⇒ $s" else "   $s" }
-                r.kind == "system" -> lines = ans.split("\n").map { "⇒ $it" }
-                else -> lines = listOf(ans)
+                r.kind == "solve" || r.kind == "inequality" || r.kind == "system" -> {
+                    val sep = if (r.kind == "system") "\n" else "; "
+                    lines = ans.split(sep).mapIndexed { i, t -> (if (i == 0) "⇒ " else "   ") + t }
+                    tex = r.tex?.mapIndexed { i, t -> (if (i == 0) "\\Rightarrow\\ " else "\\phantom{\\Rightarrow}\\ ") + t }
+                }
+                else -> {
+                    lines = listOf(ans)
+                    tex = r.tex
+                }
             }
-            out.add(Annotation(item.id, lines, x, item.bounds.centerY(), size, muted))
+            if (tex != null && tex.size != lines.size) tex = null
+            out.add(
+                Annotation(
+                    item.id, lines, tex, x, item.bounds.centerY(),
+                    item.bounds.left, item.bounds.bottom + item.charHeight * 0.35f, size, muted,
+                ),
+            )
         }
         return out
     }
@@ -576,8 +616,9 @@ class MainActivity : Activity(), InkView.Listener {
     // ------------------------------------------------------------------ panel
 
     private fun setStatus(main: String, detail: String?) {
-        inputView.text = detail ?: ""
-        answerView.text = main
+        inputLabel.text = ""
+        inputView.show(null, detail ?: "")
+        answerView.show(null, main)
         editButton.visibility = View.GONE
         graphButton.visibility = View.GONE
     }
@@ -590,12 +631,22 @@ class MainActivity : Activity(), InkView.Listener {
             setStatus(if (ink.hasInk()) "" else getString(R.string.ready), null)
             return
         }
-        inputView.text = if (r.input.isNotBlank()) getString(R.string.recognized, r.input) else ""
-        answerView.text = when {
-            r.error != null -> r.error
-            r.kind == "function" -> getString(R.string.function_hint)
-            r.answer != null -> r.answer
-            else -> getString(R.string.no_answer)
+        if (r.input.isNotBlank()) {
+            inputLabel.text = getString(R.string.recognized_label)
+            inputView.show(r.inputTex?.let { listOf(it) }, r.input)
+        } else {
+            inputLabel.text = ""
+            inputView.show(null, "")
+        }
+        when {
+            r.error != null -> answerView.show(null, r.error)
+            r.kind == "function" -> answerView.show(null, getString(R.string.function_hint))
+            r.answer != null -> {
+                val sep = if (r.kind == "system") "\n" else "; "
+                val lines = r.answer.split(sep).joinToString("\n")
+                answerView.show(r.tex, lines)
+            }
+            else -> answerView.show(null, getString(R.string.no_answer))
         }
         editButton.visibility = if (r.id != "kb") View.VISIBLE else View.GONE
         graphButton.visibility = if (r.plot != null) View.VISIBLE else View.GONE

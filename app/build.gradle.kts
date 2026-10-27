@@ -68,4 +68,7 @@ chaquopy {
 
 dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    // typeset formulas (LaTeX) for answers and recognised input
+    implementation("ru.noties:jlatexmath-android:0.2.0")
+    implementation("ru.noties:jlatexmath-android-font-cyrillic:0.2.0")
 }
