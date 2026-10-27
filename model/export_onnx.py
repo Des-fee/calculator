@@ -64,16 +64,25 @@ class EncoderExport(nn.Module):
         self.register_buffer("inv_freq", 1.0 / (10000.0 ** (dim_t / half)))
         self.scale = 2 * math.pi
 
+    @staticmethod
+    def transition(t, x):
+        x = F.relu(t.bn1(t.conv1(x)))
+        num = F.avg_pool2d(F.pad(x, (0, 1, 0, 1)), 2)
+        den = F.avg_pool2d(F.pad(torch.ones_like(x[:, :1]), (0, 1, 0, 1)), 2)
+        return num / den
+
     def forward(self, img):
         d = self.enc.model
         out = d.conv1(img)
         out = d.norm1(out)
         out = F.relu(out)
-        out = F.max_pool2d(out, 2, ceil_mode=True)
+        # ceil_mode pooling written with explicit padding: ONNX Runtime treats the
+        # clipped edge windows of ceil_mode AveragePool differently from PyTorch.
+        out = F.max_pool2d(F.pad(out, (0, 1, 0, 1)), 2)  # values are >= 0 after ReLU
         out = d.dense1(out)
-        out = d.trans1(out)
+        out = self.transition(d.trans1, out)
         out = d.dense2(out)
-        out = d.trans2(out)
+        out = self.transition(d.trans2, out)
         out = d.dense3(out)
         out = d.post_norm(out)
         f = self.enc.feature_proj(out).permute(0, 2, 3, 1)  # [b, h, w, d]
