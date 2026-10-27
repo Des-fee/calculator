@@ -80,11 +80,12 @@ fun typicalHeight(strokes: List<Stroke>): Float {
  *    becomes a system; any other candidate joins the band it overlaps most.
  */
 object Segmenter {
-    fun segment(all: List<Stroke>): Page {
-        if (all.isEmpty()) return Page(emptyList(), emptyList())
-        val h = typicalHeight(all)
+    fun segment(input: List<Stroke>): Page {
+        if (input.isEmpty()) return Page(emptyList(), emptyList())
+        val h = typicalHeight(input)
+        val all = mergeBraceHalves(input, h)
 
-        val candidates = all.filter { it.height > 1.7f * h && it.height > 2.5f * it.width && isBraceShape(it) }
+        val candidates = all.filter { isBraceCandidate(it, h) }
         val rest = all.filter { it !in candidates }
 
         var bands = splitBands(rest, h)
@@ -94,12 +95,35 @@ object Segmenter {
         val bandLists = bands.map { it.toMutableList() }.toMutableList()
         val usedInSystem = HashSet<Int>()
         for (c in candidates.sortedBy { it.bounds.left }) {
-            val covered = bandLists.indices.filter { i ->
-                i !in usedInSystem && bandLists[i].isNotEmpty() && coverage(c, bandLists[i]) > 0.5f &&
-                    bandLists[i].maxOf { it.bounds.right } - bandLists[i].minOf { it.bounds.left } > 1.2f * h
+            // a line belongs to the brace when its middle (ignoring descenders and exponents)
+            // lies within the brace's height and it starts to the right of the brace
+            val margin = 0.35f * h
+            fun inside(i: Int): Boolean {
+                val band = bandLists[i]
+                if (i in usedInSystem || band.isEmpty()) return false
+                val cy = coreCenter(band)
+                return cy >= c.bounds.top - margin && cy <= c.bounds.bottom + margin &&
+                    band.maxOf { it.bounds.right } - band.minOf { it.bounds.left } > 1.2f * h &&
+                    c.bounds.right <= band.minOf { it.bounds.left } + 0.5f * h
             }
-            val leftOk = covered.all { i -> c.bounds.right <= bandLists[i].minOf { it.bounds.left } + 0.5f * h }
-            if (covered.size >= 2 && leftOk) {
+            var covered = bandLists.indices.filter { inside(it) }
+            if (covered.size == 1) {
+                // lines written close together end up in one band: split it by stroke centres
+                val i = covered[0]
+                val band = bandLists[i]
+                if (band.maxOf { it.bounds.bottom } - band.minOf { it.bounds.top } > 1.8f * h) {
+                    val parts = mergeFractions(splitByCentres(band, h), h)
+                    if (parts.size >= 2) {
+                        bandLists.removeAt(i)
+                        bandLists.addAll(i, parts.map { it.toMutableList() })
+                        // indices after i shift; usedInSystem only holds bands above earlier braces
+                        val shifted = usedInSystem.map { if (it > i) it + parts.size - 1 else it }
+                        usedInSystem.clear(); usedInSystem.addAll(shifted)
+                        covered = bandLists.indices.filter { inside(it) }
+                    }
+                }
+            }
+            if (covered.size >= 2) {
                 usedInSystem.addAll(covered)
                 systems += InkSystem(c, covered.map { InkLine(bandLists[it]) })
             } else {
@@ -116,6 +140,53 @@ object Segmenter {
             .map { InkLine(bandLists[it]) }
         // lines inside systems are recomputed so that strokes added later are included
         return Page(lines, systems)
+    }
+
+    private fun isBraceCandidate(s: Stroke, h: Float) =
+        s.height > 1.7f * h && s.height > 2.5f * s.width && isBraceShape(s)
+
+    /** A brace drawn as two strokes (upper and lower half) is joined into one stroke. */
+    private fun mergeBraceHalves(strokes: List<Stroke>, h: Float): List<Stroke> {
+        val out = strokes.toMutableList()
+        var i = 0
+        while (i < out.size - 1) {
+            val a = out[i]
+            val b = out[i + 1]  // strokes are in drawing order: the halves are consecutive
+            val upper = if (a.bounds.top < b.bounds.top) a else b
+            val lower = if (upper === a) b else a
+            val hOverlap = min(a.bounds.right, b.bounds.right) - max(a.bounds.left, b.bounds.left)
+            if (a.height > 0.6f * h && b.height > 0.6f * h && a.height > 1.3f * a.width && b.height > 1.3f * b.width &&
+                kotlin.math.abs(lower.bounds.top - upper.bounds.bottom) < 0.35f * h && hOverlap > -0.2f * h &&
+                !isBraceCandidate(a, h) && !isBraceCandidate(b, h)
+            ) {
+                val joined = Stroke(a.id)
+                for (s in listOf(upper, lower)) for (k in 0 until s.size) joined.add(s.xs[k], s.ys[k])
+                if (isBraceCandidate(joined, h)) {
+                    out[i] = joined
+                    out.removeAt(i + 1)
+                    continue
+                }
+            }
+            i++
+        }
+        return out
+    }
+
+    /** Vertical middle of a band, robust to descenders and exponents: the median stroke centre. */
+    private fun coreCenter(band: List<Stroke>): Float {
+        val c = band.map { it.centerY }.sorted()
+        return c[c.size / 2]
+    }
+
+    /** Split strokes into rows where consecutive stroke centres jump by more than 0.7 of a character. */
+    private fun splitByCentres(strokes: List<Stroke>, h: Float): List<List<Stroke>> {
+        val sorted = strokes.sortedBy { it.centerY }
+        val rows = mutableListOf(mutableListOf(sorted[0]))
+        for (k in 1 until sorted.size) {
+            if (sorted[k].centerY - sorted[k - 1].centerY > 0.7f * h) rows.add(mutableListOf(sorted[k]))
+            else rows.last().add(sorted[k])
+        }
+        return rows
     }
 
     /** A "{": the point at mid-height is further left than both ends. An integral sign fails this. */
@@ -199,13 +270,6 @@ object Segmenter {
     private fun isHighestBar(bar: Stroke, band: List<Stroke>): Boolean {
         return band.none { it !== bar && it.bounds.bottom < bar.bounds.top &&
             it.bounds.centerX() > bar.bounds.left && it.bounds.centerX() < bar.bounds.right }
-    }
-
-    private fun coverage(c: Stroke, band: List<Stroke>): Float {
-        val top = band.minOf { it.bounds.top }
-        val bottom = band.maxOf { it.bounds.bottom }
-        val ov = min(bottom, c.bounds.bottom) - max(top, c.bounds.top)
-        return if (bottom > top) ov / (bottom - top) else 0f
     }
 
     private fun overlap(c: Stroke, band: List<Stroke>): Float {

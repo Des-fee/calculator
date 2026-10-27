@@ -84,15 +84,19 @@ def case_fraction():
     return s1 + s2 + s3 + s4
 
 
-def case_system():
+def case_system(pitch=1.9, two_strokes=False, brace_frac=1.0, first="x+y=5", second="x-y=1"):
+    """Two equations joined by a brace; `pitch` is the line distance in character heights."""
     top = 120
-    l1, r1 = write("x+y=5", 60, top)
-    l2, r2 = write("x-y=1", 60, top + 1.9 * H)
-    bh = 2.9 * H
+    l1, r1 = write(first, 60, top)
+    l2, r2 = write(second, 60, top + pitch * H)
+    span = (pitch + 1.0) * H
+    bh = span * brace_frac
     bw = 0.45 * H
-    bx, by = 24, top - 0.1 * H
+    bx, by = 24, top + (span - bh) / 2
     brace = [(1, 0), (0.55, 0.05), (0.5, 0.42), (0, 0.5), (0.5, 0.58), (0.55, 0.95), (1, 1)]
-    return [densify([(bx + px * bw, by + py * bh) for px, py in brace])] + l1 + l2
+    pts = [(bx + px * bw, by + py * bh) for px, py in brace]
+    parts = [pts[:4], pts[3:]] if two_strokes else [pts]
+    return [densify(p) for p in parts] + l1 + l2
 
 
 CASES = [
@@ -100,6 +104,9 @@ CASES = [
     ("equation", lambda: case_simple("2x+1=7"), "x = 3"),
     ("fraction", case_fraction, "3/4"),
     ("system", case_system, "x = 3, y = 2"),
+    ("system_close", lambda: case_system(pitch=1.25, first="2x+y=5"), "x = 2, y = 1"),
+    ("system_2strokes", lambda: case_system(two_strokes=True), "x = 3, y = 2"),
+    ("system_short", lambda: case_system(pitch=1.6, brace_frac=0.65), "x = 3, y = 2"),
     ("check", lambda: case_simple("3+4=7"), "✓"),
 ]
 
