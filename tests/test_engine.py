@@ -92,6 +92,7 @@ def test_document_json():
         {"id": "e", "type": "line", "tokens": "\\exists x".split()},
         {"id": "f", "type": "text", "text": "det([[1,2],[3,4]])"},
         {"id": "g", "type": "text", "text": "√2·√8"},
+        {"id": "h", "type": "system", "lines": ["x + y = 3", "x - y = 1".split()]},
     ]
     out = {o["id"]: o for o in json.loads(ce.evaluate_document(json.dumps(items)))}
     assert out["a"]["answer"] == "4", out["a"]
@@ -101,6 +102,7 @@ def test_document_json():
     assert "error" in out["e"], out["e"]
     assert out["f"]["answer"] == "−2", out["f"]
     assert out["g"]["answer"] == "4", out["g"]
+    assert out["h"]["answer"] == "x = 2, y = 1", out["h"]
 
 
 def test_plot():

@@ -87,7 +87,7 @@ object Segmenter {
         val candidates = all.filter { it.height > 1.7f * h && it.height > 2.5f * it.width && isBraceShape(it) }
         val rest = all.filter { it !in candidates }
 
-        var bands = bands(rest, h)
+        var bands = splitBands(rest, h)
         bands = mergeFractions(bands, h)
 
         val systems = mutableListOf<InkSystem>()
@@ -133,7 +133,7 @@ object Segmenter {
         return s.xs[midI] + margin < s.xs[topI] && s.xs[midI] + margin < s.xs[botI]
     }
 
-    private fun bands(strokes: List<Stroke>, h: Float): List<List<Stroke>> {
+    private fun splitBands(strokes: List<Stroke>, h: Float): List<List<Stroke>> {
         if (strokes.isEmpty()) return emptyList()
         val sorted = strokes.sortedBy { it.bounds.top }
         val result = mutableListOf<MutableList<Stroke>>()

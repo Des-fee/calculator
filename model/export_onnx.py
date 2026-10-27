@@ -21,6 +21,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
+from torch.onnx.operators import reshape_from_tensor_shape, shape_as_tensor
 
 COMER = os.path.abspath(sys.argv[1])
 OUT = os.path.abspath(sys.argv[2])
@@ -118,18 +119,19 @@ class DecoderExport(nn.Module):
     def arm_bias(self, prev_attn, curr_attn, feature):
         """Attention refinement; attn tensors are [b, H, l, s]."""
         arm = self.arm
-        h = feature.shape[1]
-        w = feature.shape[2]
         attns = torch.cat((prev_attn, curr_attn), dim=1)  # [b, 2H, l, s]
         attns = attns.cumsum(dim=2) - attns
-        b2 = attns.permute(0, 2, 1, 3)  # [b, l, 2H, s]
-        x = b2.reshape(-1, attns.shape[1], h, w)  # [(b l), 2H, h, w]
+        x = attns.permute(0, 2, 1, 3).flatten(0, 1)  # [(b l), 2H, s]
+        # [(b l), 2H, h, w] with h, w taken from the feature map at run time
+        hw = shape_as_tensor(feature)[1:3]
+        target = torch.cat((torch.tensor([-1, 2 * self.nhead], dtype=torch.long), hw))
+        x = reshape_from_tensor_shape(x, target)
         cov = arm.act(arm.conv(x))
         cov = arm.proj(cov)
         bn = arm.post_norm.bn
         cov = F.batch_norm(cov, bn.running_mean, bn.running_var, bn.weight, bn.bias, False, 0.0, bn.eps)
         cov = cov.flatten(2)  # [(b l), H, s]
-        cov = cov.reshape(curr_attn.shape[0], curr_attn.shape[2], self.nhead, -1)  # [b, l, H, s]
+        cov = cov.reshape_as(curr_attn.transpose(1, 2))  # [b, l, H, s]
         return cov.permute(0, 2, 1, 3)
 
     def forward(self, feature, tgt):
@@ -299,10 +301,13 @@ def main():
             f_t = enc(torch.from_numpy(a)[None, None]).numpy()
             f_o = enc_fn(a[None, None])
             seq = [vocab.SOS_IDX] + vocab.words2indices(cap)
-            t = np.array([seq, seq[:1] + seq[1:][::-1]], dtype=np.int64)
-            d_t = dec(torch.from_numpy(np.repeat(f_t, 2, 0)), torch.from_numpy(t)).numpy()
-            d_o = dec_fn(np.repeat(f_o, 2, 0), t)
-            print("onnx %s %s feat_err=%.2e dec_err=%.2e" % (name, a.shape, np.abs(f_t - f_o).max(), np.abs(d_t - d_o).max()))
+            nb = 1 + len(seq) % 3
+            cut = 1 + len(seq) % max(1, len(seq) - 1)
+            t = np.array([seq[:cut]] * nb, dtype=np.int64)
+            t[1:, -1] = 5
+            d_t = dec(torch.from_numpy(np.repeat(f_t, nb, 0)), torch.from_numpy(t)).numpy()
+            d_o = dec_fn(np.repeat(f_o, nb, 0), t)
+            print("onnx %s %s B=%d L=%d feat_err=%.2e dec_err=%.2e" % (name, a.shape, nb, cut, np.abs(f_t - f_o).max(), np.abs(d_t - d_o).max()))
             assert np.abs(f_t - f_o).max() < 1e-3 and np.abs(d_t - d_o).max() < 1e-3
 
     # 4) recognition rate with the ONNX graphs

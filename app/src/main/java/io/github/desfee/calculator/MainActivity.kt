@@ -148,7 +148,9 @@ class MainActivity : Activity(), InkView.Listener {
         bar.addView(eraserButton)
         bar.addView(toolButton("✕", getString(R.string.clear)) { clearAll() })
         bar.addView(toolButton("⌨", getString(R.string.keyboard)) { toggleKeyboard() })
-        bar.addView(toolButton("⋮", getString(R.string.menu)) { v -> showMenu(v) }.also { b -> b.setOnClickListener { showMenu(b) } })
+        val menuButton = toolButton("⋮", getString(R.string.menu)) {}
+        menuButton.setOnClickListener { showMenu(menuButton) }
+        bar.addView(menuButton)
         root.addView(bar)
 
         ink = InkView(this, colors)
@@ -517,6 +519,7 @@ class MainActivity : Activity(), InkView.Listener {
             val x = item.bounds.right + max(item.charHeight * 0.3f, dp(8f))
             val lines: List<String>
             var muted = false
+            val ans = r.answer
             when {
                 r.error != null -> {
                     if (!r.input.trim().endsWith("=")) continue
@@ -527,10 +530,10 @@ class MainActivity : Activity(), InkView.Listener {
                     lines = listOf("📈")
                     muted = true
                 }
-                r.answer == null -> continue
-                r.kind == "solve" || r.kind == "inequality" -> lines = r.answer.split("; ").mapIndexed { i, s -> if (i == 0) "⇒ $s" else "   $s" }
-                r.kind == "system" -> lines = r.answer.split("\n").map { "⇒ $it" }
-                else -> lines = listOf(r.answer)
+                ans == null -> continue
+                r.kind == "solve" || r.kind == "inequality" -> lines = ans.split("; ").mapIndexed { i, s -> if (i == 0) "⇒ $s" else "   $s" }
+                r.kind == "system" -> lines = ans.split("\n").map { "⇒ $it" }
+                else -> lines = listOf(ans)
             }
             out.add(Annotation(item.id, lines, x, item.bounds.centerY(), size, muted))
         }

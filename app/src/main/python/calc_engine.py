@@ -1015,7 +1015,7 @@ def evaluate_item(item):
             return res
     elif kind == "system":
         def run():
-            texts = [tokens_to_text(toks) for toks in item["lines"]]
+            texts = [toks if isinstance(toks, str) else tokens_to_text(toks) for toks in item["lines"]]
             out["input"] = "; ".join(texts)
             complete = [t for t in texts if t.strip()]
             if len(complete) < 2:

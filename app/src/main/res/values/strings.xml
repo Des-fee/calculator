@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Калькулятор</string>
+    <string name="hint_write">Пишите пример от руки</string>
+    <string name="hint_write2">Ответ появится после «=» или скобки системы</string>
+    <string name="undo">Отменить</string>
+    <string name="eraser">Ластик</string>
+    <string name="clear">Очистить</string>
+    <string name="keyboard">Клавиатура</string>
+    <string name="menu">Меню</string>
+    <string name="close">Закрыть</string>
+    <string name="fix">Исправить</string>
+    <string name="fix_title">Исправить распознанное</string>
+    <string name="fix_reset">Как написано</string>
+    <string name="graph">График</string>
+    <string name="graph_hint">Перетаскивайте график пальцем, масштаб — двумя пальцами</string>
+    <string name="keyboard_hint">Например: 2x+3=7 или sin(pi/6)</string>
+    <string name="loading">Загрузка…</string>
+    <string name="ready">Готово к работе</string>
+    <string name="load_failed">Не удалось загрузить модель</string>
+    <string name="recognized">Распознано: %1$s</string>
+    <string name="no_answer">Нет ответа — допишите «=»</string>
+    <string name="function_hint">Функция: нажмите «График»</string>
+    <string name="menu_update">Скачать последнюю версию</string>
+    <string name="menu_help">Справка</string>
+    <string name="help_text">Пишите выражение от руки. Ответ появляется сам:\n\n• после знака «=» в конце строки — значение выражения (2+2=, √2=, ∫ x² dx =, lim, d/dx);\n• для уравнения (2x+3=7) — решение;\n• для неравенства (x²&lt;4) — промежуток;\n• если слева от нескольких строк поставить фигурную скобку «{» — решение системы;\n• запись y = f(x) — график.\n\nОдин палец пишет, два пальца прокручивают лист. Нажмите на ответ, чтобы увидеть распознанную запись; кнопка «Исправить» позволяет поправить её с клавиатуры.\n\nРаспознавание работает на телефоне (модель CoMER), вычисления — SymPy.</string>
+</resources>
