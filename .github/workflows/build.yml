@@ -172,13 +172,13 @@ jobs:
         continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 30
+          api-level: 29
           arch: x86_64
-          target: google_apis
-          ram-size: 4096M
+          target: default
+          cores: 4
+          ram-size: 3072M
           disable-animations: true
           emulator-boot-timeout: 900
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: python3 tests/device_test.py app/build/outputs/apk/release/app-release.apk device-out 2>&1 | tee build.log
 
       - name: "Run on emulator (second attempt, the emulator sometimes fails to boot)"
@@ -187,13 +187,13 @@ jobs:
         continue-on-error: false
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 30
+          api-level: 29
           arch: x86_64
-          target: google_apis
-          ram-size: 4096M
+          target: default
+          cores: 4
+          ram-size: 3072M
           disable-animations: true
           emulator-boot-timeout: 900
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: python3 tests/device_test.py app/build/outputs/apk/release/app-release.apk device-out 2>&1 | tee build.log
 
       - name: Report failure
