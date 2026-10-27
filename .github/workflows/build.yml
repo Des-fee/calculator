@@ -179,7 +179,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: python3 tests/device_test.py app/build/outputs/apk/release/app-release.apk device-out 2>&1 | tee build.log
 
-      - name: Run on emulator (second attempt: the emulator sometimes fails to boot)
+      - name: "Run on emulator (second attempt, the emulator sometimes fails to boot)"
         id: emu2
         if: steps.emu1.outcome == 'failure'
         continue-on-error: false
