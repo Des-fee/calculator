@@ -1,0 +1,69 @@
+package io.github.desfee.calculator
+
+import android.content.Context
+import com.chaquo.python.PyObject
+import com.chaquo.python.Python
+import com.chaquo.python.android.AndroidPlatform
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** Bridge to the Python/SymPy engine (app/src/main/python/calc_engine.py). */
+class Engine(context: Context) {
+    private val module: PyObject
+
+    init {
+        if (!Python.isStarted()) Python.start(AndroidPlatform(context.applicationContext))
+        module = Python.getInstance().getModule("calc_engine")
+        // warm up SymPy so that the first real answer is fast
+        module.callAttr("evaluate_document", "[{\"id\":\"warm\",\"type\":\"text\",\"text\":\"x^2-1=0\"}]")
+    }
+
+    data class Result(
+        val id: String,
+        val input: String,
+        val kind: String,
+        val answer: String?,
+        val plot: String?,
+        val error: String?,
+    )
+
+    fun evaluate(items: JSONArray): Map<String, Result> {
+        val out = JSONArray(module.callAttr("evaluate_document", items.toString()).toString())
+        val map = HashMap<String, Result>()
+        for (i in 0 until out.length()) {
+            val o = out.getJSONObject(i)
+            val r = Result(
+                id = o.optString("id"),
+                input = o.optString("input", ""),
+                kind = o.optString("kind", "none"),
+                answer = o.optStringOrNull("answer"),
+                plot = o.optStringOrNull("plot"),
+                error = o.optStringOrNull("error"),
+            )
+            map[r.id] = r
+        }
+        return map
+    }
+
+    fun evaluateText(text: String): Result {
+        val items = JSONArray().put(JSONObject().put("id", "kb").put("type", "text").put("text", text).put("forced", true))
+        return evaluate(items).getValue("kb")
+    }
+
+    class Plot(val xs: DoubleArray, val ys: Array<Double?>, val label: String)
+
+    fun plot(expr: String, xmin: Double, xmax: Double, n: Int): Plot {
+        val o = JSONObject(module.callAttr("plot_points", expr, xmin, xmax, n).toString())
+        if (o.has("error")) throw IllegalArgumentException(o.getString("error"))
+        val xs = o.getJSONArray("xs")
+        val ys = o.getJSONArray("ys")
+        return Plot(
+            DoubleArray(xs.length()) { xs.getDouble(it) },
+            Array(ys.length()) { if (ys.isNull(it)) null else ys.getDouble(it) },
+            o.optString("label", ""),
+        )
+    }
+}
+
+private fun JSONObject.optStringOrNull(name: String): String? =
+    if (!has(name) || isNull(name)) null else getString(name)

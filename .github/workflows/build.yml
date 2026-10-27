@@ -36,8 +36,15 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/Green-Wood/CoMER /tmp/CoMER
           pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
-          pip install onnx==1.17.0 onnxruntime==1.20.1 pytorch-lightning==2.4.0 einops pillow opencv-python-headless
-          python model/export_onnx.py /tmp/CoMER model-out 300 | tee model-out/export.log
+          pip install onnx==1.17.0 onnxruntime==1.20.1 pytorch-lightning==2.4.0 einops pillow opencv-python-headless 2>&1 | tail -n 5
+          mkdir -p model-out
+          set -o pipefail
+          python model/export_onnx.py /tmp/CoMER model-out 300 2>&1 | tee model-out/export.log
+          echo "::notice title=Model::$(grep ExpRate model-out/export.log)"
+
+      - name: Report failure
+        if: failure()
+        run: python3 .github/annotate.py model-out/export.log
 
       - name: Model report
         run: tail -n 25 model-out/export.log >> "$GITHUB_STEP_SUMMARY"
@@ -69,7 +76,8 @@ jobs:
       - name: Engine tests
         run: |
           pip install sympy==1.13.3
-          python tests/test_engine.py
+          set -o pipefail
+          python tests/test_engine.py 2>&1 | tee build.log
 
       - uses: actions/setup-java@v4
         with:
@@ -82,9 +90,14 @@ jobs:
         env:
           BUILD_NUMBER: ${{ github.run_number }}
         run: |
-          ./gradlew --no-daemon assembleRelease
+          set -o pipefail
+          ./gradlew --no-daemon assembleRelease 2>&1 | tee build.log
           cp app/build/outputs/apk/release/app-release.apk calculator.apk
           ls -la calculator.apk
+
+      - name: Report failure
+        if: failure()
+        run: python3 .github/annotate.py build.log
 
       - name: Publish release
         if: github.ref == 'refs/heads/main'
