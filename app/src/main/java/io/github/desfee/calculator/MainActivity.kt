@@ -40,6 +40,8 @@ class MainActivity : Activity(), InkView.Listener {
     private lateinit var inputView: MathView
     private lateinit var answerView: MathView
     private lateinit var editButton: TextView
+    private lateinit var copyButton: TextView
+    private lateinit var timerView: TextView
     private lateinit var graphButton: TextView
     private lateinit var eraserButton: TextView
     private lateinit var keyboardRow: LinearLayout
@@ -67,6 +69,42 @@ class MainActivity : Activity(), InkView.Listener {
     private var lastStrokeY = 0f
 
     private val recognizeLater = Runnable { scheduleRecognition() }
+
+    private val prefs by lazy { getSharedPreferences("calc", MODE_PRIVATE) }
+
+    /** When the current background computation started (uptime ms), 0 when idle. */
+    private val busySince = java.util.concurrent.atomic.AtomicLong(0)
+    private val tick = object : Runnable {
+        override fun run() {
+            val since = busySince.get()
+            if (since == 0L) {
+                timerView.visibility = View.GONE
+                return
+            }
+            val ms = android.os.SystemClock.uptimeMillis() - since
+            if (ms >= 2000) {
+                val limit = engine?.limitSeconds ?: 0.0
+                timerView.text = if (limit > 0) getString(R.string.computing_limit, ms / 1000, limit.toInt())
+                else getString(R.string.computing, ms / 1000)
+                timerView.visibility = View.VISIBLE
+            }
+            ui.postDelayed(this, 250)
+        }
+    }
+
+    /** Run [work] on the worker thread with the "computing… N s" timer shown after 2 s. */
+    private fun background(work: () -> Unit) {
+        worker.execute {
+            busySince.set(android.os.SystemClock.uptimeMillis())
+            ui.post { ui.removeCallbacks(tick); ui.post(tick) }
+            try {
+                work()
+            } finally {
+                busySince.set(0)
+                ui.post(tick)
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -213,7 +251,9 @@ class MainActivity : Activity(), InkView.Listener {
         }
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         editButton = chip("✎ " + getString(R.string.fix)) { editFocused() }
+        copyButton = chip("⧉ " + getString(R.string.copy)) { copyFocused() }
         graphButton = chip("📈 " + getString(R.string.graph)) { openGraphForFocused() }
+        actions.addView(copyButton)
         actions.addView(editButton)
         actions.addView(graphButton)
         val inputRow = LinearLayout(this).apply {
@@ -224,6 +264,13 @@ class MainActivity : Activity(), InkView.Listener {
         inputRow.addView(scrolled(inputView))
         panel.addView(inputRow)
         panel.addView(scrolled(answerView))
+        timerView = TextView(this).apply {
+            textSize = 13f
+            setTextColor(colors.muted)
+            visibility = View.GONE
+            setPadding(0, 0, 0, dpi(6f))
+        }
+        panel.addView(timerView)
         panel.addView(actions)
 
         // keyboard input (hidden by default)
@@ -271,6 +318,7 @@ class MainActivity : Activity(), InkView.Listener {
     private fun showMenu(anchor: View) {
         val menu = PopupMenu(this, anchor)
         menu.menu.add(0, 3, 0, getString(R.string.menu_home))
+        menu.menu.add(0, 4, 1, getString(R.string.menu_limit))
         menu.menu.add(0, 1, 1, getString(R.string.menu_update))
         menu.menu.add(0, 2, 2, getString(R.string.menu_help))
         menu.setOnMenuItemClickListener {
@@ -278,10 +326,48 @@ class MainActivity : Activity(), InkView.Listener {
                 1 -> startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(DOWNLOAD_URL)))
                 2 -> showHelp()
                 3 -> ink.scrollToStart()
+                4 -> chooseLimit()
             }
             true
         }
         menu.show()
+    }
+
+    private fun chooseLimit() {
+        val values = floatArrayOf(3f, 5f, 10f, 20f, 30f, 60f, 0f)
+        val labels = values.map { if (it == 0f) getString(R.string.limit_none) else getString(R.string.limit_seconds, it.toInt()) }
+        val current = prefs.getFloat("limit", 10f)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.menu_limit)
+            .setSingleChoiceItems(labels.toTypedArray(), values.indexOfFirst { it == current }) { d, i ->
+                prefs.edit().putFloat("limit", values[i]).apply()
+                engine?.limitSeconds = values[i].toDouble()
+                d.dismiss()
+                scheduleRecognition()
+            }
+            .show()
+    }
+
+    /** The answer of the focused item (or its preview) as plain text. */
+    private fun answerTextOf(r: Engine.Result?): String? = when {
+        r == null || r.error != null -> null
+        r.answer != null -> r.answer.replace("\n", "; ")
+        r.preview != null -> r.preview
+        else -> null
+    }
+
+    private fun copyText(text: String) {
+        val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText(getString(R.string.app_name), text))
+        if (android.os.Build.VERSION.SDK_INT < 33) {
+            android.widget.Toast.makeText(this, getString(R.string.copied, text), android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun copyFocused() {
+        val kb = keyboardResult
+        val r = if (keyboardRow.visibility == View.VISIBLE && kb != null) kb else focusedId?.let { results[it] }
+        answerTextOf(r)?.let { copyText(it) }
     }
 
     private fun showHelp() {
@@ -343,7 +429,7 @@ class MainActivity : Activity(), InkView.Listener {
         val text = keyboardInput.text.toString()
         if (text.isBlank()) return
         val eng = engine ?: return
-        worker.execute {
+        background {
             val r = try {
                 eng.evaluateText(text)
             } catch (e: Exception) {
@@ -457,6 +543,12 @@ class MainActivity : Activity(), InkView.Listener {
         ui.postDelayed(recognizeLater, PAUSE_MS)
     }
 
+    override fun onAnnotationLongPressed(itemId: String) {
+        focusedId = itemId
+        updatePanel()
+        answerTextOf(results[itemId])?.let { copyText(it) }
+    }
+
     override fun onAnnotationTapped(itemId: String) {
         focusedId = itemId
         updatePanel()
@@ -469,7 +561,7 @@ class MainActivity : Activity(), InkView.Listener {
     private fun load() {
         try {
             recognizer = Recognizer(this)
-            engine = Engine(this)
+            engine = Engine(this).also { it.limitSeconds = prefs.getFloat("limit", 10f).toDouble() }
             ui.post {
                 setStatus(getString(R.string.ready), null)
                 if (ink.hasInk()) scheduleRecognition()
@@ -487,7 +579,7 @@ class MainActivity : Activity(), InkView.Listener {
         val ov = HashMap(overrides)
         val focusX = lastStrokeX
         val focusY = lastStrokeY
-        worker.execute { recognize(v, strokes, ov, focusX, focusY) }
+        background { recognize(v, strokes, ov, focusX, focusY) }
     }
 
     private fun recognize(v: Int, strokes: List<Stroke>, ov: Map<String, String>, fx: Float, fy: Float) {
@@ -565,7 +657,8 @@ class MainActivity : Activity(), InkView.Listener {
             updatePanel()
             for (r in res.values) {
                 android.util.Log.i(TAG, "RESULT " + JSONObject().put("id", r.id).put("input", r.input).put("kind", r.kind)
-                    .put("answer", r.answer ?: JSONObject.NULL).put("error", r.error ?: JSONObject.NULL))
+                    .put("answer", r.answer ?: JSONObject.NULL).put("error", r.error ?: JSONObject.NULL)
+                    .put("preview", r.preview ?: JSONObject.NULL))
             }
             android.util.Log.i(TAG, "DONE " + res.size)
         }
@@ -616,6 +709,7 @@ class MainActivity : Activity(), InkView.Listener {
     // ------------------------------------------------------------------ panel
 
     private fun setStatus(main: String, detail: String?) {
+        copyButton.visibility = View.GONE
         inputLabel.text = ""
         inputView.show(null, detail ?: "")
         answerView.show(null, main)
@@ -644,10 +738,18 @@ class MainActivity : Activity(), InkView.Listener {
             r.answer != null -> {
                 val sep = if (r.kind == "system") "\n" else "; "
                 val lines = r.answer.split(sep).joinToString("\n")
+                answerView.color = colors.accent
                 answerView.show(r.tex, lines)
+            }
+            r.preview != null -> {
+                // without "=" nothing is written on the sheet, the value is only shown here
+                answerView.color = colors.muted
+                answerView.show(r.previewTex?.let { listOf("= $it") }, "= " + r.preview)
+                answerView.color = colors.accent
             }
             else -> answerView.show(null, getString(R.string.no_answer))
         }
+        copyButton.visibility = if (answerTextOf(r) != null) View.VISIBLE else View.GONE
         editButton.visibility = if (r.id != "kb") View.VISIBLE else View.GONE
         graphButton.visibility = if (r.plot != null) View.VISIBLE else View.GONE
     }

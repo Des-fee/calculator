@@ -189,19 +189,24 @@ object Segmenter {
         return rows
     }
 
-    /** A "{": the point at mid-height is further left than both ends. An integral sign fails this. */
+    /**
+     * A "{": its leftmost point (the cusp) lies well inside its height — people often put it lower
+     * or higher than the middle — and both ends are clearly to the right of it. An integral sign
+     * fails this: its leftmost point is the bottom tail, at the very end of its height.
+     */
     private fun isBraceShape(s: Stroke): Boolean {
         var topI = 0
         var botI = 0
-        var midI = 0
-        val cy = s.bounds.centerY()
+        var leftI = 0
         for (i in 0 until s.size) {
             if (s.ys[i] < s.ys[topI]) topI = i
             if (s.ys[i] > s.ys[botI]) botI = i
-            if (kotlin.math.abs(s.ys[i] - cy) < kotlin.math.abs(s.ys[midI] - cy)) midI = i
+            if (s.xs[i] < s.xs[leftI]) leftI = i
         }
-        val margin = 0.15f * s.width
-        return s.xs[midI] + margin < s.xs[topI] && s.xs[midI] + margin < s.xs[botI]
+        val rel = (s.ys[leftI] - s.bounds.top) / max(s.height, 1f)
+        if (rel < 0.2f || rel > 0.8f) return false
+        val margin = 0.25f * s.width
+        return s.xs[leftI] + margin < s.xs[topI] && s.xs[leftI] + margin < s.xs[botI]
     }
 
     private fun splitBands(strokes: List<Stroke>, h: Float): List<List<Stroke>> {

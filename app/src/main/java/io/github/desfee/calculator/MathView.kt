@@ -50,9 +50,10 @@ class MathView(context: Context) : View(context) {
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var rows: List<Row> = emptyList()
+    private var shownColor = 0
     private val gap = 4f * resources.displayMetrics.density
 
-    var textSizePx = 16f * resources.displayMetrics.scaledDensity
+    var textSizePx = android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_SP, 16f, resources.displayMetrics)
     var color = 0xFF000000.toInt()
     var typeface: Typeface = Typeface.DEFAULT
 
@@ -61,6 +62,7 @@ class MathView(context: Context) : View(context) {
         val textLines = text?.split("\n") ?: emptyList()
         val n = max(tex?.size ?: 0, textLines.size)
         paint.textSize = textSizePx
+        shownColor = color
         paint.color = color
         paint.typeface = typeface
         val fm = paint.fontMetrics
@@ -85,7 +87,7 @@ class MathView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         var y = paddingTop.toFloat()
-        paint.color = color
+        paint.color = shownColor
         val fm = paint.fontMetrics
         for (r in rows) {
             val d = r.drawable

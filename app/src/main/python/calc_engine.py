@@ -12,9 +12,14 @@ The Android side talks to :func:`evaluate_document` and :func:`plot_points`
 using JSON strings.
 """
 
+import ctypes
 import json
 import math
 import re
+import threading
+from collections import OrderedDict
+
+import mpmath
 
 import sympy as sp
 from sympy.core.relational import Relational
@@ -463,11 +468,79 @@ def normalize_text(text):
     return s
 
 
+MAX_LOG10 = 100_000  # numbers with more digits than this are only estimated, never computed
+
+
+class TooBig(CalcError):
+    """A numeric result too large to compute exactly; `log10` is its decimal logarithm."""
+
+    def __init__(self, log10):
+        super().__init__("число слишком большое")
+        self.log10 = log10
+
+
+def _to_mpf(e):
+    if isinstance(e, sp.Integer):
+        return mpmath.mpf(int(e.p))
+    if isinstance(e, sp.Rational):
+        return mpmath.mpf(int(e.p)) / int(e.q)
+    if isinstance(e, sp.Float):
+        return mpmath.mpf(e._mpf_)
+    if e is sp.pi:
+        return +mpmath.pi
+    if e is sp.E:
+        return +mpmath.e
+    return None
+
+
+def _magnitude(e):
+    """Approximate value of a numeric expression written with + · ^ !, computed with floating exponents
+    (cheap even for towers like 2^2^2^2^2^2). Raises TooBig when the exact value would be enormous."""
+    v = _to_mpf(e)
+    if v is not None:
+        return v
+    args = [_magnitude(a) for a in e.args]
+    if any(a is None for a in args):
+        return None
+    if isinstance(e, sp.Pow):
+        b, x = args
+        if b == 0:
+            return mpmath.mpf(0)
+        lg = x * mpmath.log10(abs(b))
+        if lg > MAX_LOG10:
+            raise TooBig(lg)
+        return mpmath.power(b, x) if b > 0 else mpmath.power(abs(b), x) * (-1 if x % 2 == 1 else 1)
+    if isinstance(e, sp.Mul):
+        v = mpmath.mpf(1)
+        for a in args:
+            v *= a
+    elif isinstance(e, sp.Add):
+        v = mpmath.fsum(args)
+    elif isinstance(e, sp.factorial):
+        n = args[0]
+        if n > 25_000:
+            raise TooBig(mpmath.loggamma(n + 1) / mpmath.log(10))
+        return mpmath.factorial(n)
+    else:
+        return None
+    if v != 0 and mpmath.log10(abs(v)) > MAX_LOG10:
+        raise TooBig(mpmath.log10(abs(v)))
+    return v
+
+
 def parse(text):
     if not text.strip():
         raise CalcError("пусто")
+    norm = normalize_text(text)
     try:
-        return parse_expr(normalize_text(text), local_dict=LOCALS, transformations=TRANSFORMS)
+        # look before computing: an exact 2^2^2^2^2^2 would never finish
+        _magnitude(parse_expr(norm, local_dict=DISPLAY_LOCALS, transformations=TRANSFORMS, evaluate=False))
+    except CalcError:
+        raise
+    except Exception:  # noqa: BLE001 - only an early check
+        pass
+    try:
+        return parse_expr(norm, local_dict=LOCALS, transformations=TRANSFORMS)
     except CalcError:
         raise
     except Exception as ex:  # noqa: BLE001 - every parser error is a user error here
@@ -532,10 +605,46 @@ FUNC_NAMES = {"log": "ln", "asin": "arcsin", "acos": "arccos", "atan": "arctg", 
               "cot": "ctg", "acot": "arcctg"}
 
 
+BIG_DIGITS = 30  # integers longer than this are shown as m·10ⁿ
+
+
+def _mant_exp(x, digits):
+    """(mantissa text, exponent) of a real number, also far outside the float range."""
+    with mpmath.workdps(digits + 5):
+        if isinstance(x, sp.Integer):
+            v = mpmath.mpf(int(x.p))
+        elif isinstance(x, sp.Rational):
+            v = mpmath.mpf(int(x.p)) / int(x.q)
+        elif isinstance(x, sp.Basic):
+            v = mpmath.mpf(sp.Float(x, digits + 3)._mpf_)
+        else:
+            v = mpmath.mpf(x)
+        mant, _, exp = mpmath.nstr(v, digits, min_fixed=1, max_fixed=0).partition("e")
+    if "." in mant:
+        mant = mant.rstrip("0").rstrip(".")
+    return mant, int(exp or 0)
+
+
+def fmt_big_int(n, digits=8):
+    mant, exp = _mant_exp(n, digits)
+    return "%s·10%s" % (mant.replace("-", "−"), str(exp).translate(SUP))
+
+
+def is_big_int(e):
+    return isinstance(e, sp.Integer) and abs(int(e.p)).bit_length() > BIG_DIGITS * 3.33
+
+
 def fmt_number(x, digits=10):
     if x == 0:
         return "0"
-    s = "%.*g" % (digits, float(x))
+    try:
+        f = float(x)
+        if math.isinf(f) or (f != 0 and abs(f) < 1e-300):
+            raise OverflowError
+    except (OverflowError, TypeError, ValueError):
+        mant, exp = _mant_exp(x, digits)
+        return "%s·10%s" % (mant.replace("-", "−"), str(exp).translate(SUP))
+    s = "%.*g" % (digits, f)
     if "e" in s:
         mant, exp = s.split("e")
         if "." in mant:
@@ -633,6 +742,8 @@ def fmt(e):
     if e is sp.I:
         return "i"
     if isinstance(e, sp.Integer):
+        if is_big_int(e):
+            return fmt_big_int(e)
         return str(e).replace("-", "−")
     if isinstance(e, sp.Rational):
         return ("%d/%d" % (abs(e.p), e.q)) if e.p > 0 else "−%d/%d" % (abs(e.p), e.q)
@@ -731,6 +842,9 @@ def to_tex(e):
         return r"\text{не определено}"
     if isinstance(e, sp.Float):
         return num_tex(e)
+    if is_big_int(e):
+        mant, exp = _mant_exp(e, 8)
+        return r"%s \cdot 10^{%d}" % (mant, exp)
     if isinstance(e, sp.And):
         return r"\ \text{и}\ ".join(to_tex(a) for a in _ordered(e.args))
     if isinstance(e, sp.Or):
@@ -929,6 +1043,14 @@ def value_line(expr, decimal_only=False):
     return [X(expr)]
 
 
+def too_big_line(log10):
+    """≈ 10^(5.9·10¹⁹⁷²⁷) for a number with that many digits."""
+    mant, exp = _mant_exp(log10, 3)
+    inner_text = "%s·10%s" % (mant, str(exp).translate(SUP)) if exp >= 6 else fmt_number(log10, 8)
+    inner_tex = r"%s \cdot 10^{%d}" % (mant, exp) if exp >= 6 else num_tex(log10, 8)
+    return [("≈ 10^(%s)" % inner_text, r"\approx 10^{%s}" % inner_tex)]
+
+
 def value_text(expr, decimal_only=False):
     return line_text(value_line(expr, decimal_only))
 
@@ -1070,7 +1192,10 @@ def is_function_definition(lhs, rhs):
 def evaluate_trailing(lhs_text, forced):
     """Value of the left part of `expr =` as an answer line (or None), and the plot text."""
     decimal = has_float(lhs_text)
-    raw = parse(lhs_text)
+    try:
+        raw = parse(lhs_text)
+    except TooBig as big:
+        return too_big_line(big.log10), None
     if isinstance(raw, sp.MatrixBase):
         return value_line(raw.applyfunc(sp.simplify)), None
     result = simplify_value(raw)
@@ -1268,12 +1393,14 @@ def _valid(text):
     if depth:
         return False
     pieces, _ = split_relation(text)
-    try:
-        for p in pieces:
-            if p.strip():
+    for p in pieces:
+        if p.strip():
+            try:
                 parse(p)
-    except CalcError:
-        return False
+            except TooBig:
+                pass  # well-formed, just enormous
+            except CalcError:
+                return False
     return True
 
 
@@ -1355,6 +1482,7 @@ def evaluate_item(item):
                                       forced=item.get("forced", False))
             out["input"] = text
             out["input_tex"] = text_to_tex(text) if "error" not in res else None
+            add_preview(text, res)
             return res
     elif kind == "system":
         def run():
@@ -1380,9 +1508,97 @@ def evaluate_item(item):
     return out
 
 
-def evaluate_document(json_text):
+def add_preview(text, res):
+    """Without "=" there is no answer on the sheet, but the panel shows the value right away."""
+    if res.get("kind") != "none" or "error" in res or not text.strip():
+        return
+    pieces, ops = split_relation(text)
+    if ops:
+        return
+    try:
+        line, _ = evaluate_trailing(text, True)
+    except Exception:  # noqa: BLE001 - a preview is optional
+        return
+    if line:
+        res["preview"] = line_text(line)
+        res["preview_tex"] = line_tex(line)
+
+
+# ---------------------------------------------------------------------------
+# Time limit and cache
+# ---------------------------------------------------------------------------
+
+class _Timeout(BaseException):
+    """Raised inside a computation that ran out of time (BaseException: SymPy must not swallow it)."""
+
+
+def run_limited(fn, seconds):
+    """Run fn() in a thread; after `seconds` the thread is interrupted. Returns fn()'s dict or an error dict."""
+    box = {}
+
+    def target():
+        try:
+            box["result"] = fn()
+        except _Timeout:
+            pass
+        except BaseException as ex:  # noqa: BLE001
+            box["error"] = ex
+
+    t = threading.Thread(target=target, daemon=True)
+    t.start()
+    t.join(seconds)
+    if t.is_alive():
+        # pure-Python SymPy code checks for async exceptions between bytecodes, so this stops it
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(t.ident), ctypes.py_object(_Timeout))
+        t.join(2.0)
+        return {"error": "считается дольше %s с — остановлено" % _fmt_seconds(seconds), "timeout": True}
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
+
+
+def _fmt_seconds(x):
+    return ("%g" % x).replace(".", ",")
+
+
+_CACHE = OrderedDict()
+_CACHE_SIZE = 300
+
+
+def evaluate_item_cached(item, limit):
+    """Results are cached by the item's content, so a slow line is not recomputed on every stroke."""
+    key = json.dumps({k: v for k, v in item.items() if k != "id"}, sort_keys=True, ensure_ascii=False) + "|%g" % limit
+    hit = _CACHE.get(key)
+    if hit is None:
+        if limit and limit > 0:
+            hit = run_limited(lambda: evaluate_item(item), limit)
+            if hit.get("timeout"):
+                hit = dict(hit, input=_input_of(item))
+        else:
+            hit = evaluate_item(item)
+        _CACHE[key] = hit
+        if len(_CACHE) > _CACHE_SIZE:
+            _CACHE.popitem(last=False)
+    else:
+        _CACHE.move_to_end(key)
+    return dict(hit, id=item.get("id"))
+
+
+def _input_of(item):
+    try:
+        if item.get("type") == "text":
+            return item["text"]
+        if item.get("type") == "system":
+            return "; ".join(system_line_text(e) for e in item["lines"])
+        return tokens_to_text(item["tokens"])
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def evaluate_document(json_text, limit=10.0):
+    """Evaluate all items; each one may take at most `limit` seconds (0 = no limit)."""
     items = json.loads(json_text)
-    return json.dumps([evaluate_item(it) for it in items], ensure_ascii=False)
+    return json.dumps([evaluate_item_cached(it, float(limit)) for it in items], ensure_ascii=False)
 
 
 def tokens_to_text_json(json_tokens):

@@ -49,6 +49,7 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
         fun onInkChanged()
         fun onStrokeFinished(stroke: Stroke)
         fun onAnnotationTapped(itemId: String)
+        fun onAnnotationLongPressed(itemId: String)
     }
 
     var listener: Listener? = null
@@ -70,6 +71,17 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
     private var velocity: VelocityTracker? = null
 
     private var downTime = 0L
+    private var downX = 0f
+    private var downY = 0f
+    private var pressedAnnotation: String? = null
+    private val longPress = Runnable {
+        val id = pressedAnnotation ?: return@Runnable
+        pressedAnnotation = null
+        current = null  // the press was not writing
+        performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+        listener?.onAnnotationLongPressed(id)
+        invalidate()
+    }
     private val density = resources.displayMetrics.density
 
     private val inkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -267,6 +279,10 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
                 scroller.forceFinished(true)
                 panning = false
                 downTime = e.eventTime
+                downX = e.x
+                downY = e.y
+                pressedAnnotation = if (eraser) null else annotations.firstOrNull { it.hitRect.contains(x, y) }?.itemId
+                if (pressedAnnotation != null) postDelayed(longPress, ViewConfiguration.getLongPressTimeout().toLong())
                 velocity?.recycle()
                 velocity = VelocityTracker.obtain().also { it.addMovement(e) }
                 if (eraser) {
@@ -279,6 +295,7 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 // second finger: move the sheet, drop the stroke that was just started
+                cancelAnswerPress()
                 current = null
                 panning = true
                 lastPanX = avg(e, true)
@@ -288,6 +305,9 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
             }
             MotionEvent.ACTION_MOVE -> {
                 velocity?.addMovement(e)
+                if (pressedAnnotation != null && hypot(e.x - downX, e.y - downY) > ViewConfiguration.get(context).scaledTouchSlop) {
+                    cancelAnswerPress()
+                }
                 if (panning) {
                     val ax = avg(e, true)
                     val ay = avg(e, false)
@@ -316,6 +336,7 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
                 }
             }
             MotionEvent.ACTION_UP -> {
+                cancelAnswerPress()
                 val s = current
                 current = null
                 if (s != null && !panning) {
@@ -338,6 +359,7 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
                 invalidate()
             }
             MotionEvent.ACTION_CANCEL -> {
+                cancelAnswerPress()
                 current = null
                 panning = false
                 velocity?.recycle()
@@ -346,6 +368,11 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
             }
         }
         return true
+    }
+
+    private fun cancelAnswerPress() {
+        pressedAnnotation = null
+        removeCallbacks(longPress)
     }
 
     /** Keep the sheet moving after a quick two-finger swipe. */

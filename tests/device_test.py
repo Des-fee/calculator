@@ -87,7 +87,7 @@ def case_fraction():
     return s1 + s2 + s3 + s4
 
 
-def case_system(pitch=1.9, two_strokes=False, brace_frac=1.0, first="x+y=5", second="x-y=1"):
+def case_system(pitch=1.9, two_strokes=False, brace_frac=1.0, first="x+y=5", second="x-y=1", cusp=0.5):
     """Two equations joined by a brace; `pitch` is the line distance in character heights."""
     top = 120
     l1, r1 = write(first, 60, top)
@@ -96,7 +96,7 @@ def case_system(pitch=1.9, two_strokes=False, brace_frac=1.0, first="x+y=5", sec
     bh = span * brace_frac
     bw = 0.45 * H
     bx, by = 24, top + (span - bh) / 2
-    brace = [(1, 0), (0.55, 0.05), (0.5, 0.42), (0, 0.5), (0.5, 0.58), (0.55, 0.95), (1, 1)]
+    brace = [(1, 0), (0.55, 0.05), (0.5, cusp - 0.08), (0, cusp), (0.5, cusp + 0.08), (0.55, 0.95), (1, 1)]
     pts = [(bx + px * bw, by + py * bh) for px, py in brace]
     parts = [pts[:4], pts[3:]] if two_strokes else [pts]
     return [densify(p) for p in parts] + l1 + l2
@@ -110,10 +110,12 @@ CASES = [
     ("system_close", lambda: case_system(pitch=1.25, first="2x+y=5"), "x = 2, y = 1"),
     ("system_2strokes", lambda: case_system(two_strokes=True), "x = 3, y = 2"),
     ("system_short", lambda: case_system(pitch=1.6, brace_frac=0.65), "x = 3, y = 2"),
+    ("system_low_cusp", lambda: case_system(cusp=0.68), "x = 3, y = 2"),
     ("check", lambda: case_simple("3+4=7"), "✓"),
     ("times", lambda: case_simple("12×3="), "36"),
     ("mul_dot", lambda: case_simple("4·5="), "20"),
     ("decimal", lambda: case_simple("2.5+1="), "3.5"),
+    ("preview", lambda: case_simple("12+30"), "42"),
 ]
 
 
@@ -153,7 +155,7 @@ def main():
     for name, make, expected in CASES:
         t0 = time.time()
         results, log = run_case(name, make(), out)
-        answers = [r.get("answer") for r in results]
+        answers = [r.get("answer") or r.get("preview") for r in results]
         ok = any(a is not None and expected in a for a in answers)
         passed += ok
         report.append({"case": name, "expected": expected, "ok": ok, "seconds": round(time.time() - t0, 1),

@@ -29,10 +29,18 @@ class Engine(context: Context) {
         val inputTex: String? = null,
         /** Typeset answer, one LaTeX string per answer line. */
         val tex: List<String>? = null,
+        /** Value of a line without "=", shown only in the panel. */
+        val preview: String? = null,
+        val previewTex: String? = null,
+        val timedOut: Boolean = false,
     )
 
+    /** Seconds one item may take (0 = no limit). */
+    @Volatile
+    var limitSeconds = 10.0
+
     fun evaluate(items: JSONArray): Map<String, Result> {
-        val out = JSONArray(module.callAttr("evaluate_document", items.toString()).toString())
+        val out = JSONArray(module.callAttr("evaluate_document", items.toString(), limitSeconds).toString())
         val map = HashMap<String, Result>()
         for (i in 0 until out.length()) {
             val o = out.getJSONObject(i)
@@ -45,6 +53,9 @@ class Engine(context: Context) {
                 error = o.optStringOrNull("error"),
                 inputTex = o.optStringOrNull("input_tex"),
                 tex = o.optJSONArray("tex")?.let { a -> List(a.length()) { a.getString(it) } },
+                preview = o.optStringOrNull("preview"),
+                previewTex = o.optStringOrNull("preview_tex"),
+                timedOut = o.optBoolean("timeout", false),
             )
             map[r.id] = r
         }

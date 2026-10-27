@@ -157,6 +157,34 @@ def test_candidates():
     assert r["answer"] == "x = 3, y = 2", r
 
 
+def test_preview_limit_big():
+    def run(item, limit=10.0):
+        return json.loads(ce.evaluate_document(json.dumps([item]), limit))[0]
+
+    # no "=": no answer on the sheet, but a preview for the panel
+    r = run({"id": "p", "type": "line", "tokens": "\\frac { 1 } { 2 } + \\frac { 1 } { 3 }".split()})
+    assert r["answer"] is None and r["preview"] == "5/6 ≈ 0.83333333", r
+    assert r["preview_tex"] == "\\frac{5}{6} \\approx 0.83333333", r
+    # huge numbers are shown as m·10ⁿ
+    r = run({"id": "b", "type": "line", "tokens": "2 ^ { 2 ^ { 2 ^ { 2 ^ { 2 } } } } =".split()})
+    assert r["answer"] == "2.0035299·10¹⁹⁷²⁸", r
+    assert r["tex"] == ["2.0035299 \\cdot 10^{19728}"], r
+    # one more storey: estimated, never computed
+    r = run({"id": "b2", "type": "line", "tokens": "2 ^ { 2 ^ { 2 ^ { 2 ^ { 2 ^ { 2 } } } } } =".split()})
+    assert r["answer"] == "≈ 10^(6.03·10¹⁹⁷²⁷)", r
+    r = run({"id": "b3", "type": "text", "text": "100000! ="})
+    assert r["answer"].startswith("≈ 10^(456573.4"), r
+    # a computation that takes too long is stopped
+    import time
+    t0 = time.time()
+    r = run({"id": "t", "type": "text", "text": "factorint(2^251 - 1)"}, 1.0)
+    assert r.get("timeout") and time.time() - t0 < 4, (r, time.time() - t0)
+    # and the result is cached (no second wait)
+    t0 = time.time()
+    r = run({"id": "t2", "type": "text", "text": "factorint(2^251 - 1)"}, 1.0)
+    assert r.get("timeout") and r["id"] == "t2" and time.time() - t0 < 0.5, r
+
+
 def test_plot():
     data = json.loads(ce.plot_points("y = 1/x", -1.0, 1.0, 5))
     assert data["ys"][2] is None and data["ys"][0] == -1.0, data
