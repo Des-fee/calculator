@@ -278,6 +278,7 @@ def load_mathwriting():
             continue
         glyphs.setdefault(o["label"], []).append([src[i] for i in o["strokeIndices"]])
     log("isolated glyphs:", {k: len(v) for k, v in sorted(glyphs.items()) if k in CALC_GLYPHS})
+    log("all glyph labels:", " ".join(sorted(glyphs)))
     return train, synth, valid[:VALID_MAX], glyphs
 
 

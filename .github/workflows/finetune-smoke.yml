@@ -40,6 +40,7 @@ jobs:
           set -o pipefail
           SMOKE=1 COMER_DIR=/tmp/CoMER OUT_DIR=smoke-out python -u model/finetune_mathwriting.py 2>&1 | tee build.log
           cat smoke-out/metrics.json
+          echo "::notice title=Data::$(grep -E 'MathWriting:|glyph|calculator|CROHME' build.log | tr '\n' '|' | cut -c1-3500)"
 
       - name: Export the fine-tuned checkpoint
         run: |
