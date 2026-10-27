@@ -36,6 +36,9 @@ cells = [
 
 Если секрета нет: скачайте `comer_mathwriting.ckpt` из *Output* и пришлите его в чат.
 
+**Продолжить обучение** после прошлого запуска: *Add Input → Your Work* → выбрать прошлую версию этого
+ноутбука. Ноутбук сам найдёт там `comer_mathwriting.ckpt` и начнёт с него, а не с исходной модели.
+
 Лицензия MathWriting — CC BY-NC-SA 4.0 (только некоммерческое использование).
 """),
     code("""
@@ -46,8 +49,13 @@ cells = [
     md("Скрипт обучения (тот же, что `model/finetune_mathwriting.py` в репозитории):"),
     code("%%writefile finetune_mathwriting.py\n" + script),
     code("""
-import os, subprocess, sys
+import glob, os, subprocess, sys
 os.environ.update(COMER_DIR="CoMER", OUT_DIR="/kaggle/working", HOURS="10")
+# continue from an earlier run: add its Output to this notebook (Add Input -> Your Work -> the notebook)
+prev = sorted(glob.glob("/kaggle/input/**/comer_mathwriting.ckpt", recursive=True))
+if prev:
+    os.environ["INIT_CKPT"] = prev[0]
+    print("продолжаю обучение с", prev[0])
 p = subprocess.Popen([sys.executable, "-u", "finetune_mathwriting.py"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 for line in p.stdout:
     print(line, end="")
