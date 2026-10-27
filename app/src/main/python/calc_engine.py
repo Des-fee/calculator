@@ -164,7 +164,14 @@ class TokenConverter:
 
     def operand(self, stop_at_func=True):
         if self.peek() == "(":
-            return self.sub(self.group_tokens())
+            toks = self.group_tokens()
+            # keep postfix powers and factorials: (1 + 1/n)^n
+            while self.peek() in ("^", "!"):
+                if self.take() == "^":
+                    toks = toks + ["^", "{"] + self.group_tokens() + ["}"]
+                else:
+                    toks = toks + ["!"]
+            return self.sub(toks)
         end = self.operand_end(stop_at_func)
         toks = self.t[self.i:end]
         self.i = end
