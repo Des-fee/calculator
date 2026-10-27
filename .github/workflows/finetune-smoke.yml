@@ -13,6 +13,9 @@ on:
       - .github/workflows/finetune-smoke.yml
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -46,6 +49,14 @@ jobs:
         run: |
           set -o pipefail
           COMER_CKPT=smoke-out/comer_mathwriting.ckpt python model/export_onnx.py /tmp/CoMER smoke-onnx 10 2>&1 | tee -a build.log
+
+      - name: Publish the log to branch ci-finetune-smoke
+        if: always()
+        run: |
+          mkdir -p pub && cp build.log pub/ && cp smoke-out/metrics.json pub/ 2>/dev/null || true
+          cd pub && git init -q -b ci-finetune-smoke && git add -A
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com commit -qm "smoke ${{ github.sha }}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" ci-finetune-smoke
 
       - name: Report
         if: always()
