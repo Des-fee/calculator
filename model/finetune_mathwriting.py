@@ -289,10 +289,10 @@ def load_mathwriting():
 # glyph box in "em" (digit height = 1, y down, baseline at 1): (top, bottom) or special handling
 SHORT = set("acemnorsuvwxz")
 DESC = set("gpqy")
-BOXES = {"+": (0.25, 0.9), "\\times": (0.32, 0.88), "\\div": (0.25, 0.92), "<": (0.3, 0.9), ">": (0.3, 0.9),
+BOXES = {".": (0.86, 1.0), "\\cdot": (0.53, 0.67), "+": (0.25, 0.9), "\\times": (0.32, 0.88), "\\div": (0.25, 0.92), "<": (0.3, 0.9), ">": (0.3, 0.9),
          "(": (-0.12, 1.15), ")": (-0.12, 1.15), "/": (-0.05, 1.08)}
 FLAT = {"-": 0.6, "=": 0.6}  # centre height of flat glyphs
-CALC_GLYPHS = set("0123456789xyabcnt+-=()/<>") | {"\\times", "\\div"}
+CALC_GLYPHS = set("0123456789xyabcnt+-=()/<>.") | {"\\times", "\\div", "\\cdot"}
 
 
 class Layout:
@@ -325,7 +325,7 @@ def _dot(x, y, r, rng):
 def put(lay, tok, glyphs, rng, scale=1.0, dy=0.0):
     """Append one glyph (a CROHME token) at the cursor."""
     j = rng.uniform(-0.04, 0.04)
-    if tok in ("\\cdot", "."):
+    if tok in ("\\cdot", ".") and (tok not in glyphs or rng.random() < 0.5):
         y = (0.62 if tok == "\\cdot" else 0.95) * scale + dy + j
         r = rng.uniform(0.035, 0.07) * scale
         lay.strokes += _dot(lay.x + r, y, r, rng)
