@@ -128,6 +128,84 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
 
     fun hasInk(): Boolean = strokes.isNotEmpty()
 
+    /** Strokes for saving: [{id, p: [x0, y0, x1, y1, …]}] in page coordinates. */
+    fun strokesJson(): org.json.JSONArray = synchronized(strokes) {
+        val arr = org.json.JSONArray()
+        for (s in strokes) {
+            val p = org.json.JSONArray()
+            for (i in 0 until s.size) {
+                p.put(Math.round(s.xs[i] * 10) / 10.0)
+                p.put(Math.round(s.ys[i] * 10) / 10.0)
+            }
+            arr.put(org.json.JSONObject().put("id", s.id).put("p", p))
+        }
+        arr
+    }
+
+    /** Open a saved sheet: stroke ids are kept (corrections are stored by them). */
+    fun loadStrokes(arr: org.json.JSONArray) {
+        synchronized(strokes) {
+            strokes.clear()
+            var maxId = 0L
+            for (k in 0 until arr.length()) {
+                val o = arr.getJSONObject(k)
+                val s = Stroke(o.getLong("id"))
+                val p = o.getJSONArray("p")
+                var i = 0
+                while (i + 1 < p.length()) {
+                    s.add(p.getDouble(i).toFloat(), p.getDouble(i + 1).toFloat())
+                    i += 2
+                }
+                if (s.size > 0) strokes.add(s)
+                maxId = maxOf(maxId, s.id)
+            }
+            nextId = maxOf(nextId, maxId + 1)
+        }
+        undoStack.clear()
+        annotations = emptyList()
+        scrollToStart()
+        listener?.onInkChanged()
+    }
+
+    /** Everything written and answered, in page coordinates (null for an empty sheet). */
+    fun contentBounds(): RectF? {
+        val r = RectF()
+        var any = false
+        synchronized(strokes) {
+            for (s in strokes) {
+                if (!any) r.set(s.bounds) else r.union(s.bounds)
+                any = true
+            }
+        }
+        for (a in annotations) {
+            val rows = rowsOf(a)
+            val w = rows.maxOfOrNull { it.w } ?: 0f
+            val h = rows.sumOf { it.h.toDouble() }.toFloat()
+            val box = RectF(a.x, a.centerY - h / 2, a.x + w, a.centerY + h / 2)
+            if (!any) r.set(box) else r.union(box)
+            any = true
+        }
+        return if (any) r else null
+    }
+
+    /** Draw the page area [area] (page coordinates) onto [canvas] at the given scale (for export). */
+    fun renderPage(canvas: Canvas, area: RectF, scale: Float) {
+        canvas.drawColor(colors.paper)
+        canvas.save()
+        canvas.scale(scale, scale)
+        canvas.translate(-area.left, -area.top)
+        synchronized(strokes) {
+            for (s in strokes) drawStroke(canvas, s)
+        }
+        // answers at their usual place to the right of each line
+        val savedX = offsetX
+        offsetX = area.right  // "the screen" reaches past the page: nothing is moved under its line
+        for (a in annotations) drawAnnotation(canvas, a)
+        offsetX = savedX
+        canvas.restore()
+        invalidate()
+    }
+
     fun setAnnotations(list: List<Annotation>) {
         annotations = list
         invalidate()

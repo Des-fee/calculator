@@ -45,8 +45,14 @@ class Engine(context: Context) {
         val out = JSONArray(module.callAttr("evaluate_document", items.toString(), limitSeconds).toString())
         val map = HashMap<String, Result>()
         for (i in 0 until out.length()) {
-            val o = out.getJSONObject(i)
-            val r = Result(
+            val r = parse(out.getJSONObject(i))
+            map[r.id] = r
+        }
+        return map
+    }
+
+    private fun parse(o: JSONObject): Result =
+            Result(
                 id = o.optString("id"),
                 input = o.optString("input", ""),
                 kind = o.optString("kind", "none"),
@@ -60,14 +66,10 @@ class Engine(context: Context) {
                 timedOut = o.optBoolean("timeout", false),
                 exact = o.optStringOrNull("exact"),
             )
-            map[r.id] = r
-        }
-        return map
-    }
 
     fun evaluateText(text: String): Result {
-        val items = JSONArray().put(JSONObject().put("id", "kb").put("type", "text").put("text", text).put("forced", true))
-        return evaluate(items).getValue("kb")
+        val o = JSONArray(module.callAttr("evaluate_text_in_sheet", text).toString()).getJSONObject(0)
+        return parse(o)
     }
 
     /** Typeset preview of typed text, or null when it does not parse (yet). */

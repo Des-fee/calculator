@@ -31,6 +31,20 @@
     <string name="short_value">≈ Кратко</string>
     <string name="copied">Скопировано: %1$s</string>
     <string name="no_answer">Нет ответа — допишите «=»</string>
+    <string name="defined_hint">запомнено — можно использовать в строках ниже</string>
+    <string name="menu_sheets">Листы…</string>
+    <string name="menu_export">Экспорт листа…</string>
+    <string name="sheet_default">Лист %1$d</string>
+    <string name="sheet_new">Новый лист</string>
+    <string name="sheets_title">Листы (открыт «%1$s»)</string>
+    <string name="sheet_rename">Переименовать</string>
+    <string name="sheet_delete">Удалить</string>
+    <string name="sheet_delete_confirm">Удалить лист «%1$s»? Это нельзя отменить.</string>
+    <string name="export_png">Картинка (PNG)</string>
+    <string name="export_pdf">PDF</string>
+    <string name="export_text">Текст — поделиться</string>
+    <string name="export_empty">Лист пуст</string>
+    <string name="export_done">Сохранено</string>
     <string name="function_hint">Функция: нажмите «График»</string>
     <string name="menu_update">Скачать последнюю версию</string>
     <string name="menu_help">Как пользоваться</string>
@@ -98,6 +112,19 @@ lim → <i>lim(▮, x, 0)</i>, Σ → <i>sum(▮, n, 1, oo)</i>. Поменяй�
 <li>Системы сравнений (китайская теорема) — со скобкой: <i>x = 2 mod 3</i> и <i>x = 3 mod 5</i> → x ≡ 8 (mod 15).</li>
 <li>Статистика: mean, median, mode, var, std (выборочные — svar, sstd).</li>
 <li>Системы счисления: <i>bin(100)</i>, <i>hex(255)</i>, <i>base(255, 3)</i>, ввод <i>0xFF</i>, <i>0b1010</i>.</li>
+</ul>
+<h3>Рабочий лист, как в MathCad</h3>
+<ul>
+<li>Переменные: напишите <i>a = 3</i> — ниже на листе <i>a² + 1 =</i> даст 10. Определение ничего не пишет
+на листе, значение видно в панели. Работают строки ниже определения; лист пересчитывается сверху вниз
+при любом изменении.</li>
+<li>Свои функции: <i>f(x) = x² + 1</i>, затем <i>f(3) =</i>, <i>f′(2) =</i>, <i>∫ f(x) dx =</i>.
+Можно с несколькими аргументами: <i>g(x, y) = xy</i>.</li>
+<li>x остаётся неизвестной: <i>x = 3</i> не запоминается, чтобы уравнения ниже решались как обычно.</li>
+<li>Единицы измерения (с клавиатуры): <i>30 km/h in m/s</i>, <i>5 м в см</i>, <i>2 kWh in J</i>,
+<i>1 atm in mmHg</i>, <i>20 °C in F</i>. Несовместимые единицы калькулятор заметит.</li>
+<li>Листы сохраняются сами. Нажмите на название листа сверху (или ⋮ → «Листы…»), чтобы открыть другой,
+создать новый, переименовать или удалить. ⋮ → «Экспорт листа…» — картинка, PDF или текст.</li>
 </ul>
 <h3>Если что-то не так</h3>
 <ul>

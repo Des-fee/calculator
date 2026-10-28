@@ -265,6 +265,35 @@ def test_phase1():
         assert got == expected, (t, got, expected)
 
 
+def test_worksheet():
+    def sheet(*lines):
+        items = [{"id": str(k), "type": "text", "text": t, "forced": True, "top": k} for k, t in enumerate(lines)]
+        # given out of order on purpose: the sheet is read from top to bottom
+        res = json.loads(ce.evaluate_document(json.dumps(items[::-1])))[::-1]
+        return [r.get("answer") or r.get("preview") or r.get("error") for r in res]
+
+    assert sheet("a = 3", "a^2 + 1 =") == ["a = 3", "10"]
+    assert sheet("a = 2", "b = a + 1", "a*b =") == ["a = 2", "b = 3", "6"]
+    assert sheet("f(x) = x^2 + 1", "f(3) =", "f'(2) =", "int(f(x), x, 0, 3) =") == ["f(x) = x² + 1", "10", "4", "12"]
+    assert sheet("k = 5", "x^2 = k")[1] == "x = ±√5 ≈ 2.236068"
+    assert sheet("a^2 =", "a = 3") == ["a²", "a = 3"]  # only lines above count
+    assert sheet("x = 3", "x^2 =")[1] == "x²"  # x stays the unknown
+
+
+def test_units():
+    def ans(t):
+        r = json.loads(ce.evaluate_document(json.dumps([{"id": "a", "type": "text", "text": t, "forced": True}])))[0]
+        return r.get("answer") or r.get("error")
+
+    assert ans("30 km/h in m/s =") == "25/3 m/s ≈ 8.3333333 m/s"
+    assert ans("5 м в см") == "500 см"
+    assert ans("1 mi in km") == "1.609344 km"
+    assert ans("20 °C in F") == "68 °F"
+    assert ans("1 atm in mmHg") == "760 mmHg"
+    assert ans("5 kg in m").startswith("единицы несовместимы")
+    assert ans("100 in binary =") == "1100100₂"
+
+
 def test_plot():
     data = json.loads(ce.plot_points("y = 1/x", -1.0, 1.0, 5))
     assert data["ys"][2] is None and data["ys"][0] == -1.0, data

@@ -36,6 +36,7 @@ import kotlin.math.min
 class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
     private lateinit var colors: Palette
     private lateinit var ink: InkView
+    private lateinit var titleView: TextView
     private lateinit var inputLabel: TextView
     private lateinit var inputView: MathView
     private lateinit var answerView: MathView
@@ -85,6 +86,12 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
     private var lastStrokeY = 0f
 
     private val recognizeLater = Runnable { scheduleRecognition() }
+
+    /** The open sheet (files/sheets/<id>.json); saved a moment after every change. */
+    private var sheetId = ""
+    private var sheetName = ""
+    private val saveLater = Runnable { saveSheet() }
+    private val io = Executors.newSingleThreadExecutor()
 
     private val prefs by lazy { getSharedPreferences("calc", MODE_PRIVATE) }
 
@@ -141,8 +148,210 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
             prefs.edit().putBoolean("help_seen", true).apply()
             ui.post { showHelp() }
         }
+        if (intent?.getStringExtra("ink_b64") == null) openSheet(prefs.getString("sheet", null))
         loadTestInk(intent)
         worker.execute { load() }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        ui.removeCallbacks(saveLater)
+        saveSheet()
+    }
+
+    // ------------------------------------------------------------------ sheets
+
+    private fun sheetData(): JSONObject {
+        val ov = JSONObject()
+        for ((k, v) in overrides) ov.put(k, v)
+        return JSONObject().put("name", sheetName).put("strokes", ink.strokesJson()).put("overrides", ov)
+    }
+
+    private fun saveSheet() {
+        if (sheetId.isEmpty()) return
+        val id = sheetId
+        val data = sheetData()
+        // an empty new sheet is not worth a file
+        if (data.getJSONArray("strokes").length() == 0 && Sheets.load(this, id) == null) return
+        io.execute {
+            try {
+                Sheets.save(this, id, data)
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "save failed", e)
+            }
+        }
+    }
+
+    private fun saveSoon() {
+        ui.removeCallbacks(saveLater)
+        ui.postDelayed(saveLater, 1500)
+    }
+
+    /** Open a saved sheet, or start a new one when [id] is null or missing. */
+    private fun openSheet(id: String?) {
+        val data = id?.let { Sheets.load(this, it) }
+        overrides.clear()
+        tokenCache.clear()
+        focusedId = null
+        results = emptyMap()
+        items = emptyMap()
+        if (data != null) {
+            sheetId = id!!
+            sheetName = data.optString("name", getString(R.string.sheet_default, 1))
+            data.optJSONObject("overrides")?.let { ov -> for (k in ov.keys()) overrides[k] = ov.getString(k) }
+            ink.loadStrokes(data.optJSONArray("strokes") ?: JSONArray())
+        } else {
+            sheetId = Sheets.newId()
+            sheetName = getString(R.string.sheet_default, Sheets.list(this).size + 1)
+            ink.loadStrokes(JSONArray())
+        }
+        prefs.edit().putString("sheet", sheetId).apply()
+        titleView.text = sheetName
+        updatePanel()
+    }
+
+    private fun showSheets() {
+        saveSheet()
+        val list = Sheets.list(this).filter { it.id != sheetId }
+        val fmt = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
+        val labels = listOf("＋ " + getString(R.string.sheet_new)) + list.map { it.name + "   ·   " + fmt.format(java.util.Date(it.updated)) }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.sheets_title, sheetName))
+            .setItems(labels.toTypedArray()) { _, i ->
+                saveSheet()
+                openSheet(if (i == 0) null else list[i - 1].id)
+            }
+            .setNeutralButton(R.string.sheet_rename) { _, _ -> renameSheet() }
+            .setNegativeButton(R.string.sheet_delete) { _, _ -> deleteSheet() }
+            .show()
+    }
+
+    private fun renameSheet() {
+        val field = EditText(this).apply {
+            setText(sheetName)
+            setSelection(text.length)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.sheet_rename)
+            .setView(LinearLayout(this).apply {
+                setPadding(dpi(20f), dpi(8f), dpi(20f), 0)
+                addView(field, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            })
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val name = field.text.toString().trim()
+                if (name.isNotEmpty()) {
+                    sheetName = name
+                    titleView.text = name
+                    if (Sheets.load(this, sheetId) == null && !ink.hasInk()) Sheets.save(this, sheetId, sheetData())
+                    saveSheet()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun deleteSheet() {
+        AlertDialog.Builder(this)
+            .setMessage(getString(R.string.sheet_delete_confirm, sheetName))
+            .setPositiveButton(R.string.sheet_delete) { _, _ ->
+                ui.removeCallbacks(saveLater)
+                Sheets.delete(this, sheetId)
+                openSheet(Sheets.list(this).firstOrNull()?.id)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    // ------------------------------------------------------------------ export
+
+    private fun showExport() {
+        if (!ink.hasInk()) {
+            android.widget.Toast.makeText(this, R.string.export_empty, android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        val labels = arrayOf(getString(R.string.export_png), getString(R.string.export_pdf), getString(R.string.export_text))
+        AlertDialog.Builder(this)
+            .setTitle(R.string.menu_export)
+            .setItems(labels) { _, i ->
+                when (i) {
+                    0 -> createDocument("image/png", "$sheetName.png", REQUEST_PNG)
+                    1 -> createDocument("application/pdf", "$sheetName.pdf", REQUEST_PDF)
+                    else -> shareText()
+                }
+            }
+            .show()
+    }
+
+    private fun createDocument(mime: String, title: String, request: Int) {
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = mime
+            putExtra(Intent.EXTRA_TITLE, title)
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, request)
+    }
+
+    /** The sheet as a picture: everything written plus the answers, with a margin. */
+    private fun sheetBitmap(): android.graphics.Bitmap? {
+        val area = ink.contentBounds() ?: return null
+        area.inset(-dp(24f), -dp(24f))
+        val scale = min(1f, 4096f / max(area.width(), area.height()))
+        val bmp = android.graphics.Bitmap.createBitmap(
+            (area.width() * scale).toInt().coerceAtLeast(1), (area.height() * scale).toInt().coerceAtLeast(1),
+            android.graphics.Bitmap.Config.ARGB_8888,
+        )
+        ink.renderPage(android.graphics.Canvas(bmp), area, scale)
+        return bmp
+    }
+
+    private fun writeExport(request: Int, uri: Uri) {
+        val bmp = sheetBitmap() ?: return
+        contentResolver.openOutputStream(uri)?.use { out ->
+            if (request == REQUEST_PNG) {
+                bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            } else {
+                val pdf = android.graphics.pdf.PdfDocument()
+                // A4 width (595 pt); the page is as long as the sheet
+                val k = 595f / bmp.width
+                val page = pdf.startPage(android.graphics.pdf.PdfDocument.PageInfo.Builder(595, (bmp.height * k).toInt().coerceAtLeast(1), 1).create())
+                page.canvas.scale(k, k)
+                page.canvas.drawBitmap(bmp, 0f, 0f, android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+                pdf.finishPage(page)
+                pdf.writeTo(out)
+                pdf.close()
+            }
+        }
+        android.widget.Toast.makeText(this, R.string.export_done, android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    /** Every line as text, top to bottom: "2 + 2 = 4", "x^2 = 4 ⇒ x = ±2". */
+    private fun sheetText(): String {
+        val sb = StringBuilder(sheetName).append("\n\n")
+        for (item in items.values.sortedWith(compareBy({ it.bounds.top }, { it.bounds.left }))) {
+            val r = results[item.id] ?: continue
+            val input = r.input.trim()
+            if (input.isEmpty()) continue
+            val ans = answerTextOf(r)
+            sb.append(
+                when {
+                    r.kind == "define" || ans == null -> input
+                    r.kind == "value" -> (if (input.endsWith("=")) "$input " else "$input = ") + ans
+                    else -> "$input  ⇒  " + ans.replace("\n", "; ")
+                },
+            ).append("\n")
+        }
+        return sb.toString()
+    }
+
+    private fun shareText() {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, sheetName)
+            putExtra(Intent.EXTRA_TEXT, sheetText())
+        }
+        startActivity(Intent.createChooser(send, getString(R.string.export_text)))
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -173,6 +382,7 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
     override fun onDestroy() {
         super.onDestroy()
         worker.shutdownNow()
+        io.shutdown()
     }
 
     // ------------------------------------------------------------------ layout
@@ -225,12 +435,17 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dpi(12f), dpi(2f), dpi(4f), dpi(2f))
         }
-        bar.addView(TextView(this).apply {
+        titleView = TextView(this).apply {
             text = getString(R.string.app_name)
             textSize = 18f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(colors.text)
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            // the sheet's name; tap for the list of sheets
+            setOnClickListener { showSheets() }
+        }
+        bar.addView(titleView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         bar.addView(toolButton("↶", getString(R.string.undo)) { ink.undo() })
         eraserButton = toolButton("⌫", getString(R.string.eraser)) { toggleEraser() }
         bar.addView(eraserButton)
@@ -303,6 +518,8 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
 
     private fun showMenu(anchor: View) {
         val menu = PopupMenu(this, anchor)
+        menu.menu.add(0, 6, 0, getString(R.string.menu_sheets))
+        menu.menu.add(0, 7, 0, getString(R.string.menu_export))
         menu.menu.add(0, 3, 0, getString(R.string.menu_home))
         menu.menu.add(0, 4, 1, getString(R.string.menu_limit))
         menu.menu.add(0, 5, 2, getString(R.string.menu_samples))
@@ -315,6 +532,8 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
                 3 -> ink.scrollToStart()
                 4 -> chooseLimit()
                 5 -> showSamples()
+                6 -> showSheets()
+                7 -> showExport()
             }
             true
         }
@@ -495,6 +714,7 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
                 val (rTex, rText, muted) = when {
                     r.error != null -> Triple(null, if (tex == null) getString(R.string.editor_incomplete) else r.error, true)
                     r.kind == "function" -> Triple(null, getString(R.string.function_hint), true)
+                    r.kind == "define" -> Triple(r.previewTex?.let { listOf(it) }, (r.preview ?: "") + "\n" + getString(R.string.defined_hint), true)
                     r.answer != null -> Triple(r.tex, r.answer.replace("\n", "\n"), false)
                     else -> Triple(null, "", true)
                 }
@@ -530,6 +750,7 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
             }
         }
         closeEditor()
+        saveSoon()
         scheduleRecognition()
     }
 
@@ -539,6 +760,7 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
         item?.lineKey?.let { overrides.remove(it) }
         item?.lineKeys?.forEach { overrides.remove(it) }
         closeEditor()
+        saveSoon()
         scheduleRecognition()
     }
 
@@ -613,7 +835,16 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
         val uri = data?.data
-        if (requestCode != REQUEST_EXPORT || resultCode != RESULT_OK || uri == null) return
+        if (resultCode != RESULT_OK || uri == null) return
+        if (requestCode == REQUEST_PNG || requestCode == REQUEST_PDF) {
+            try {
+                writeExport(requestCode, uri)
+            } catch (e: Exception) {
+                android.widget.Toast.makeText(this, e.message ?: "ошибка", android.widget.Toast.LENGTH_LONG).show()
+            }
+            return
+        }
+        if (requestCode != REQUEST_EXPORT) return
         try {
             contentResolver.openOutputStream(uri)?.use { it.write(Samples.read(this)) }
             android.widget.Toast.makeText(this, getString(R.string.samples_exported, Samples.count(this)), android.widget.Toast.LENGTH_LONG).show()
@@ -678,6 +909,7 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
 
     override fun onInkChanged() {
         version.incrementAndGet()
+        saveSoon()
         ui.removeCallbacks(recognizeLater)
         ui.postDelayed(recognizeLater, PAUSE_MS)
     }
@@ -755,7 +987,7 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
         for (line in page.lines) {
             val id = "L:" + line.key
             newItems[id] = Item(id, line.key, line.bounds, line.charHeight)
-            val o = JSONObject().put("id", id)
+            val o = JSONObject().put("id", id).put("top", line.bounds.top.toDouble())
             val l = lineJson(line)
             if (l is String) {
                 o.put("type", "text").put("text", l).put("forced", false)
@@ -772,7 +1004,7 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
             newItems[id] = Item(id, null, sys.bounds, h, sys.lines.sortedBy { it.bounds.top }.map { it.key })
             val lines = JSONArray()
             for (line in sys.lines.sortedBy { it.bounds.top }) lines.put(lineJson(line))
-            json.put(JSONObject().put("id", id).put("type", "system").put("lines", lines))
+            json.put(JSONObject().put("id", id).put("type", "system").put("lines", lines).put("top", sys.bounds.top.toDouble()))
             if (v != version.get()) return
         }
         // forget cached tokens of lines that no longer exist
@@ -885,6 +1117,12 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
                 answerView.color = colors.accent
                 answerView.show(r.tex, lines)
             }
+            r.kind == "define" && r.preview != null -> {
+                // a = 3: remembered for the lines below, nothing is written on the sheet
+                answerView.color = colors.muted
+                answerView.show(r.previewTex?.let { listOf(it) }, r.preview + "\n" + getString(R.string.defined_hint))
+                answerView.color = colors.accent
+            }
             r.preview != null -> {
                 // without "=" nothing is written on the sheet, the value is only shown here
                 answerView.color = colors.muted
@@ -902,6 +1140,8 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
 
     companion object {
         const val REQUEST_EXPORT = 42
+        const val REQUEST_PNG = 43
+        const val REQUEST_PDF = 44
         const val PAUSE_MS = 700L
         const val TAG = "Calc"
         const val DOWNLOAD_URL = "https://github.com/Des-fee/calculator/releases/latest/download/calculator.apk"

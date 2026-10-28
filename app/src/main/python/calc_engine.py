@@ -1007,6 +1007,7 @@ def editable_text(text):
 def parse(text):
     if not text.strip():
         raise CalcError("пусто")
+    text = _ctx_primes(text)
     norm = normalize_text(text)
     try:
         # look before computing: an exact 2^2^2^2^2^2 would never finish
@@ -1015,9 +1016,9 @@ def parse(text):
         raise
     except Exception:  # noqa: BLE001 - only an early check
         pass
-    loc = LOCALS
+    loc = dict(LOCALS, **_CTX) if _CTX else LOCALS
     if re.search(r"\(\s*i\s*,", norm) or re.search(r",\s*i\s*,", norm):  # i is a summation index here
-        loc = dict(LOCALS, i=sp.Symbol("i"))
+        loc = dict(loc, i=sp.Symbol("i"))
     try:
         return parse_expr(norm, local_dict=loc, transformations=TRANSFORMS)
     except CalcError:
@@ -1361,6 +1362,15 @@ class _AsWrittenPrinter(LatexPrinter):
         return r"\frac{%s}{%s}" % (n, d)
 
 
+    def _print_AppliedUndef(self, expr):
+        # user functions f(3), f'(x): always with brackets
+        name = expr.func.__name__
+        primes = re.match(r"(.+)__d(\d)$", name)
+        if primes:
+            name = primes.group(1) + "'" * int(primes.group(2))
+        return r"%s\left(%s\right)" % (name, ", ".join(self._print(a) for a in expr.args))
+
+
 _AS_WRITTEN = _AsWrittenPrinter({"order": "none", "ln_notation": True, "inv_trig_style": "full",
                                  "fold_func_brackets": True})
 
@@ -1447,7 +1457,12 @@ DISPLAY_LOCALS = _display_locals()
 
 def expr_tex(text):
     """Typeset form of linear text as written (nothing is computed)."""
-    e = parse_expr(normalize_text(text), local_dict=DISPLAY_LOCALS, transformations=TRANSFORMS, evaluate=False)
+    loc = DISPLAY_LOCALS
+    funcs = [k for k, v in _CTX.items() if isinstance(v, sp.Lambda)]
+    if funcs:
+        loc = dict(loc, **{k: sp.Function(k) for k in funcs})
+        text = _ctx_primes(text)
+    e = parse_expr(normalize_text(text), local_dict=loc, transformations=TRANSFORMS, evaluate=False)
     return _russian_funcs(_AS_WRITTEN.doprint(e))
 
 
@@ -2054,6 +2069,112 @@ def answer(kind, lines=None, plot=None, sep="; "):
     return res
 
 
+# ---------------------------------------------------------------- units of measurement
+
+def _unit_table():
+    import sympy.physics.units as u
+    m, s_, kg, g = u.meter, u.second, u.kilogram, u.gram
+    J, W, N, Pa, L = u.joule, u.watt, u.newton, u.pascal, u.liter
+    t = {
+        "m": m, "cm": u.centimeter, "mm": u.millimeter, "km": u.kilometer, "um": u.micrometer, "μm": u.micrometer,
+        "nm": u.nanometer, "dm": m / 10, "in": u.inch, "inch": u.inch, "ft": u.foot, "yd": u.yard, "mi": u.mile,
+        "mile": u.mile, "nmi": u.nautical_mile, "AU": u.astronomical_unit, "ly": 9460730472580800 * m,
+        "s": s_, "sec": s_, "ms": u.millisecond, "us": u.microsecond, "ns": u.nanosecond, "min": u.minute,
+        "h": u.hour, "hr": u.hour, "d": u.day, "day": u.day, "week": 7 * u.day, "yr": u.year, "year": u.year,
+        "kg": kg, "g": g, "mg": u.milligram, "t": u.tonne, "lb": u.pound, "oz": u.pound / 16,
+        "N": N, "kN": 1000 * N, "J": J, "kJ": 1000 * J, "MJ": 10**6 * J, "cal": sp.Rational(4184, 1000) * J,
+        "kcal": 4184 * J, "eV": u.electronvolt, "Wh": W * u.hour, "kWh": 1000 * W * u.hour,
+        "W": W, "kW": 1000 * W, "MW": 10**6 * W, "GW": 10**9 * W, "hp": sp.Rational(7354987, 10000) * W,
+        "Pa": Pa, "kPa": 1000 * Pa, "MPa": 10**6 * Pa, "bar": u.bar, "atm": u.atmosphere, "mmHg": sp.Rational(101325, 760) * Pa,
+        "psi": u.psi, "L": L, "l": L, "mL": u.milliliter, "ml": u.milliliter, "gal": sp.Rational(3785411784, 10**12) * m**3,
+        "ha": u.hectare, "V": u.volt, "A": u.ampere, "mA": u.ampere / 1000, "Ohm": u.ohm, "Ω": u.ohm,
+        "C": u.coulomb, "Hz": u.hertz, "kHz": 1000 * u.hertz, "MHz": 10**6 * u.hertz, "GHz": 10**9 * u.hertz,
+        "K": u.kelvin, "B": u.byte, "KB": 1024 * u.byte, "MB": 1024**2 * u.byte, "GB": 1024**3 * u.byte,
+        "bit": u.bit, "kmh": u.kilometer / u.hour, "kph": u.kilometer / u.hour, "mph": u.mile / u.hour,
+        "rad": sp.S.One, "deg": sp.pi / 180,
+    }
+    ru = {
+        "м": "m", "см": "cm", "мм": "mm", "км": "km", "мкм": "um", "нм": "nm", "дм": "dm", "дюйм": "in",
+        "фут": "ft", "миля": "mi", "с": "s", "сек": "s", "мс": "ms", "мин": "min", "ч": "h", "час": "h",
+        "сут": "d", "нед": "week", "год": "yr", "кг": "kg", "г": "g", "мг": "mg", "т": "t", "фунт": "lb",
+        "Н": "N", "кН": "kN", "Дж": "J", "кДж": "kJ", "МДж": "MJ", "кал": "cal", "ккал": "kcal", "эВ": "eV",
+        "Вт": "W", "кВт": "kW", "МВт": "MW", "ГВт": "GW", "Втч": "Wh", "кВтч": "kWh", "лс": "hp",
+        "Па": "Pa", "кПа": "kPa", "МПа": "MPa", "бар": "bar", "атм": "atm", "л": "L", "мл": "mL", "га": "ha",
+        "В": "V", "А": "A", "мА": "mA", "Ом": "Ohm", "Кл": "C", "Гц": "Hz", "кГц": "kHz", "МГц": "MHz",
+        "ГГц": "GHz", "К": "K", "Б": "B", "КБ": "KB", "МБ": "MB", "ГБ": "GB", "бит": "bit",
+        "рад": "rad", "град": "deg",
+    }
+    t.update({k: t[v] for k, v in ru.items()})
+    return t
+
+
+_UNITS = None
+CONVERT_RE = re.compile(r"^(.+?)\s+(?:in|to|в|->|→)\s+([^=]+?)\s*=?\s*$")
+TEMP_RE = re.compile(r"^\s*(-?\d+(?:[.,]\d+)?)\s*°?\s*([CFKСК]|℃|℉)\s+(?:in|to|в|->|→)\s+°?\s*([CFKСК]|℃|℉)\s*=?\s*$")
+
+
+def _units():
+    global _UNITS
+    if _UNITS is None:
+        _UNITS = _unit_table()
+    return _UNITS
+
+
+def _unit_expr(text):
+    t = text.replace("·", "*").replace("²", "^2").replace("³", "^3").replace(",", ".")
+    t = re.sub(r"\b(к?Вт)\s*[*·]?\s*ч\b", r"\1ч", t)
+    t = re.sub(r"\bкм\s*/\s*ч\b", "km/h", t)
+    t = re.sub(r"(?<=\d)(?=[A-Za-zА-Яа-яμΩ])", " ", t)
+    names = re.findall(r"[A-Za-zА-Яа-яμΩ]+", t)
+    table = _units()
+    if not names or any(n not in table for n in names):
+        return None
+    try:
+        return parse_expr(t, local_dict=dict(table), transformations=TRANSFORMS)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _si(q):
+    import sympy.physics.units as u
+    return u.convert_to(q, [u.meter, u.second, u.kilogram, u.ampere, u.kelvin, u.byte])
+
+
+def process_units(text):
+    """'30 km/h in m/s' -> 25/3 m/s ≈ 8.333333 m/s; '20 °C in F' -> 68 °F. None when not a conversion."""
+    m = TEMP_RE.match(text)
+    if m:
+        v = sp.nsimplify(m.group(1).replace(",", "."))
+        norm = {"С": "C", "К": "K", "℃": "C", "℉": "F"}
+        a, b = norm.get(m.group(2), m.group(2)), norm.get(m.group(3), m.group(3))
+        kelvin = {"C": v + sp.Rational(27315, 100), "F": (v - 32) * sp.Rational(5, 9) + sp.Rational(27315, 100), "K": v}[a]
+        out = {"C": kelvin - sp.Rational(27315, 100), "F": (kelvin - sp.Rational(27315, 100)) * sp.Rational(9, 5) + 32,
+               "K": kelvin}[b]
+        unit = {"C": "°C", "F": "°F", "K": "K"}[b]
+        return answer("value", [value_line(out, False) + [(" " + unit, r"\ \text{%s}" % unit)]])
+    m = CONVERT_RE.match(text)
+    if not m or re.search(r"\b(binary|hex|octal|двоичн|шестнадцат|восьмерич)", m.group(2)):
+        return None
+    target = _unit_expr(m.group(2))
+    src = _unit_expr(m.group(1))
+    if target is None or src is None or not target.free_symbols and not target.atoms(sp.physics.units.Quantity):
+        return None
+    ratio = sp.simplify(_si(src) / _si(target))
+    if ratio.atoms(sp.physics.units.Quantity) or ratio.free_symbols:
+        raise CalcError("единицы несовместимы: %s и %s" % (m.group(1).strip(), m.group(2).strip()))
+    unit = m.group(2).strip().replace("^2", "²").replace("^3", "³")
+    unit_tex = r"\ \text{%s}" % unit
+    if ratio.is_Rational and not sp.factorint(ratio.q).keys() - {2, 5}:
+        ratio = sp.Float(ratio, 15)  # 1.609344 km rather than 25146/15625
+    line = value_line(ratio, False)
+    out = []
+    for piece in line:  # "25/3 ≈ 8.33" -> "25/3 m/s ≈ 8.33 m/s"
+        if out and piece[0].strip() in ("=", "≈"):
+            out.append((" " + unit, unit_tex))
+        out.append(piece)
+    return answer("value", [out + [(" " + unit, unit_tex)]])
+
+
 def process(text, forced=False):
     """Process one statement (one line) of linear text.
 
@@ -2061,6 +2182,10 @@ def process(text, forced=False):
     `forced` means the user explicitly asked for a result (keyboard '=' key).
     """
     text = text.strip()
+    if re.search(r"\s(in|to|в|->|→)\s", text):
+        res = process_units(text)
+        if res is not None:
+            return res
     if re.search(r"\bmod\b", text):
         return process_mod(text, forced)
     pieces, ops = split_relation(text)
@@ -2549,9 +2674,108 @@ _CACHE = OrderedDict()
 _CACHE_SIZE = 300
 
 
+# ---------------------------------------------------------------- worksheet: definitions across lines
+
+_CTX = {}  # names defined higher up on the sheet: a = 3 (value), f(x) = x^2 + 1 (Lambda)
+_LAST_CTX = {}  # everything defined on the whole sheet (used by the keyboard editor)
+_SHEET_LOCK = threading.Lock()  # the sheet and the keyboard editor are evaluated from different threads
+NAME_RE = r"[A-Za-zА-Яа-яα-ωΑ-Ω](?:_?\d+)?"
+DEF_RE = re.compile(r"^\s*(%s)\s*:?=\s*(.+?)\s*$" % NAME_RE)
+FUNC_DEF_RE = re.compile(r"^\s*(%s)\s*\(\s*([a-z](?:\s*,\s*[a-z])*)\s*\)\s*:?=\s*(.+?)\s*$" % NAME_RE)
+NOT_DEFINABLE = {"x", "e", "i", "E", "I", "π"}
+
+
+def _ctx_primes(text):
+    """f'(2) with a user function f -> f__d1(2)."""
+    if not _CTX:
+        return text
+
+    def sub(m):
+        name, n = m.group(1), len(m.group(2))
+        return name + "__d%d(" % n if isinstance(_CTX.get(name), sp.Lambda) else m.group(0)
+    return re.sub(r"(?<![A-Za-z_])([A-Za-z])('+|′+)\s*\(", sub, text)
+
+
+def definition_of(text):
+    """'a = 3' -> ('a', 3); 'f(x) = x^2' -> ('f', Lambda). None when the line is not a definition."""
+    if not text or text.rstrip().endswith("=") or ";" in text:
+        return None
+    t = text.replace("≔", ":=")
+    m = FUNC_DEF_RE.match(t)
+    if m and len(split_relation(t)[1]) == 1:
+        name, args, rhs = m.group(1), [a.strip() for a in m.group(2).split(",")], m.group(3)
+        if (name in LOCALS and not isinstance(LOCALS[name], sp.Symbol)) or name in NOT_DEFINABLE or name in args:
+            return None
+        syms = [sp.Symbol(a) for a in args]
+        saved = _CTX.pop(name, None)
+        try:
+            body = parse(rhs)
+        finally:
+            if saved is not None:
+                _CTX[name] = saved
+        return name, sp.Lambda(tuple(syms), body)
+    m = DEF_RE.match(t)
+    if not m or len(split_relation(t.replace(":=", "="))[1]) != 1:
+        return None
+    name, rhs = m.group(1), m.group(2)
+    if name in NOT_DEFINABLE or (name in LOCALS and not isinstance(LOCALS[name], sp.Symbol)):
+        return None
+    saved = _CTX.pop(name, None)
+    try:
+        value = parse(rhs)
+    except CalcError:
+        return None
+    finally:
+        if saved is not None:
+            _CTX[name] = saved
+    if isinstance(value, (sp.Basic, sp.MatrixBase)) and sp.Symbol(name) not in getattr(value, "free_symbols", set()):
+        return name, value
+    return None
+
+
+def _define(name, value):
+    _CTX[name] = value
+    if isinstance(value, sp.Lambda):
+        for k in (1, 2, 3):
+            var = value.variables[0]
+            _CTX[name + "__d%d" % k] = sp.Lambda(value.variables, sp.diff(value.expr, var, k))
+
+
+def _ctx_key():
+    return "|".join("%s=%s" % (k, sp.srepr(v)) for k, v in sorted(_CTX.items()) if "__d" not in k)
+
+
+def _define_result(res, name, value):
+    """A definition shows nothing on the sheet (as in MathCad); the panel shows its value."""
+    out = {k: v for k, v in res.items() if k in ("id", "input", "input_tex", "plot")}
+    out["kind"] = "define"
+    out["input_tex"] = text_to_tex(res.get("input", "").replace(":=", "=")) or res.get("input_tex")
+    if isinstance(value, sp.Lambda):
+        args = ", ".join(str(a) for a in value.variables)
+        out["preview"] = "%s(%s) = %s" % (name, args, fmt(value.expr))
+        try:
+            out["preview_tex"] = r"%s\left(%s\right) = %s" % (name, args, sp.latex(value.expr))
+        except Exception:  # noqa: BLE001
+            pass
+        if value.variables == (sp.Symbol("x"),) and not value.expr.free_symbols - {sp.Symbol("x")}:
+            out["plot"] = sp.sstr(value.expr)
+            out["kind"] = "function"
+    else:
+        try:
+            line = value_line(value, False) if not isinstance(value, sp.MatrixBase) else [X(value)]
+            out["preview"] = name + " = " + line_text(line)
+            out["preview_tex"] = name + " = " + line_tex(line)
+        except Exception:  # noqa: BLE001
+            out["preview"] = name + " = " + fmt(value)
+        if res.get("kind") == "function":
+            out["kind"] = "function"
+    return out
+
+
 def evaluate_item_cached(item, limit):
     """Results are cached by the item's content, so a slow line is not recomputed on every stroke."""
-    key = json.dumps({k: v for k, v in item.items() if k != "id"}, sort_keys=True, ensure_ascii=False) + "|%g" % limit
+    key = json.dumps({k: v for k, v in item.items() if k not in ("id", "top")}, sort_keys=True,
+                     ensure_ascii=False) + "|%g" % limit + "|" + _ctx_key()
     hit = _CACHE.get(key)
     if hit is None:
         if limit and limit > 0:
@@ -2582,7 +2806,48 @@ def _input_of(item):
 def evaluate_document(json_text, limit=10.0):
     """Evaluate all items; each one may take at most `limit` seconds (0 = no limit)."""
     items = json.loads(json_text)
-    return json.dumps([evaluate_item_cached(it, float(limit)) for it in items], ensure_ascii=False)
+    # the sheet is read from top to bottom: a = 3 above, a^2 = below
+    order = sorted(range(len(items)), key=lambda k: (items[k].get("top", 0), k))
+    results = [None] * len(items)
+    with _SHEET_LOCK:
+        return _evaluate_sheet(items, order, results, limit)
+
+
+def _evaluate_sheet(items, order, results, limit):
+    _CTX.clear()
+    try:
+        for k in order:
+            res = evaluate_item_cached(items[k], float(limit))
+            if items[k].get("type") != "system" and not res.get("timeout"):
+                try:
+                    d = run_limited(lambda: definition_of(res.get("input", "")), 3) if limit else definition_of(res.get("input", ""))
+                except Exception:  # noqa: BLE001
+                    d = None
+                if isinstance(d, tuple):
+                    _define(*d)
+                    res = _define_result(res, *d)
+            results[k] = res
+        _LAST_CTX.clear()
+        _LAST_CTX.update(_CTX)
+    finally:
+        _CTX.clear()
+    return json.dumps(results, ensure_ascii=False)
+
+
+def evaluate_text_in_sheet(text):
+    """The keyboard editor: one line, with everything defined on the sheet."""
+    with _SHEET_LOCK:
+        _CTX.update(_LAST_CTX)
+        try:
+            return _evaluate_kb(text)
+        finally:
+            _CTX.clear()
+
+
+def _evaluate_kb(text):
+    res = evaluate_item_cached({"id": "kb", "type": "text", "text": text, "forced": True}, 10.0)
+    d = definition_of(res.get("input", "")) if not res.get("timeout") else None
+    return json.dumps([_define_result(res, *d) if d else res], ensure_ascii=False)
 
 
 def tokens_to_text_json(json_tokens):
