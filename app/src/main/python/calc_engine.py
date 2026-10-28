@@ -204,6 +204,9 @@ class TokenConverter:
 
         while self.peek() is not None:
             tok = self.take()
+            if tok == "\\bmod":
+                emit(" mod ", "op")
+                continue
 
             if tok.isdigit() or tok == ".":
                 num = tok
@@ -469,10 +472,29 @@ def rewrite_primes(toks):
     return toks
 
 
+def rewrite_words(toks):
+    """'m o d' -> \\bmod;  dy/dx (a fraction d y over d x) -> d/dx (y)."""
+    out = []
+    i = 0
+    while i < len(toks):
+        if toks[i:i + 3] == ["m", "o", "d"]:
+            out.append("\\bmod")
+            i += 3
+            continue
+        if toks[i:i + 9][:3] == ["\\frac", "{", "d"] and len(toks) >= i + 9 and toks[i + 4:i + 9] == ["}", "{", "d", "x", "}"] \
+                and toks[i + 3].isalpha() and len(toks[i + 3]) == 1:
+            out += ["\\frac", "{", "d", "}", "{", "d", "x", "}", "(", toks[i + 3], ")"]
+            i += 9
+            continue
+        out.append(toks[i])
+        i += 1
+    return out
+
+
 def tokens_to_text(tokens):
     if isinstance(tokens, str):
         tokens = tokens.split()
-    return TokenConverter(rewrite_primes(tokens)).convert()
+    return TokenConverter(rewrite_primes(rewrite_words(list(tokens)))).convert()
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +735,9 @@ def fmt_number(x, digits=10):
 
 
 def _sym_name(name):
+    m = re.fullmatch(r"C(\d+)", name)  # integration constants of differential equations
+    if m:
+        return "C" + m.group(1).translate(SUB)
     if "_" in name:
         base, idx = name.split("_", 1)
         if idx.isdigit():
@@ -1559,7 +1584,11 @@ def process(text, forced=False):
     `forced` means the user explicitly asked for a result (keyboard '=' key).
     """
     text = text.strip()
+    if re.search(r"\bmod\b", text):
+        return process_mod(text, forced)
     pieces, ops = split_relation(text)
+    if ops == ["="] and pieces[1].strip() and "diff(" in normalize_text(text) and re.search(r"\by\b", text):
+        return process_ode(pieces[0], pieces[1])
     if not ops:
         if forced:
             line, plot = evaluate_trailing(text, True)
@@ -1597,6 +1626,83 @@ def process(text, forced=False):
     if op == "!=":
         return answer("none")
     return answer("inequality", [solve_inequality(rel)])
+
+
+Y_OF_X = sp.Function("y")(sp.Symbol("x"))
+
+
+def process_ode(lhs_text, rhs_text):
+    """A differential equation in y(x): y' = 2x, y'' + y = 0, dy/dx = y."""
+    loc = dict(LOCALS, y=Y_OF_X)
+    try:
+        lhs = parse_expr(normalize_text(lhs_text), local_dict=loc, transformations=TRANSFORMS)
+        rhs = parse_expr(normalize_text(rhs_text), local_dict=loc, transformations=TRANSFORMS)
+    except Exception as ex:  # noqa: BLE001
+        raise CalcError("не удалось разобрать: %s = %s" % (lhs_text, rhs_text)) from ex
+    eq = sp.Eq(lhs, rhs)
+    if not eq.has(sp.Derivative):
+        raise CalcError("нет производной от y")
+    try:
+        sols = sp.dsolve(eq, Y_OF_X)
+    except (NotImplementedError, ValueError) as ex:
+        raise CalcError("это дифференциальное уравнение не решается в формулах") from ex
+    if not isinstance(sols, list):
+        sols = [sols]
+    y = sp.Symbol("y")
+    lines = []
+    for sol in sols[:MAX_ROOTS]:
+        lines.append([X(y), O("=")] + [X(sp.simplify(sol.rhs) if sol.rhs.count_ops() > 30 else sol.rhs)])
+    return answer("solve", lines)
+
+
+def process_mod(text, forced):
+    """Arithmetic modulo n: '17 mod 5 =', '3x = 4 mod 7' (a congruence, solved by trying every residue)."""
+    pieces, ops = split_relation(text)
+    if len(ops) > 1:
+        raise CalcError("слишком много знаков сравнения")
+    if not ops or not pieces[1].strip():  # a value: mod is the remainder
+        expr_text = re.sub(r"\bmod\b", "%", pieces[0])
+        if not ops and not forced:
+            return answer("none")
+        val = sp.simplify(parse(expr_text))
+        return answer("value", [value_line(val)])
+    sides = [p.strip() for p in pieces]
+    mod_side = next((k for k in (1, 0) if re.search(r"\bmod\b", sides[k])), None)
+    m = re.match(r"(.*)\bmod\b\s*\(?\s*(\d+)\s*\)?\s*$", sides[mod_side])
+    if not m:
+        raise CalcError("пишите модуль в конце: 3x = 4 mod 7")
+    n = int(m.group(2))
+    if n < 2:
+        raise CalcError("модуль должен быть больше 1")
+    sides[mod_side] = m.group(1).strip() or "0"
+    diff = sp.expand(parse(sides[0]) - parse(sides[1]))
+    syms = order_vars(diff.free_symbols)
+    if len(syms) > 1:
+        raise CalcError("сравнение по модулю решается для одной переменной")
+    n_tex = r"\ (\operatorname{mod}\ %d)" % n
+    n_txt = " (mod %d)" % n
+    if not syms:
+        ok = diff.is_Integer and int(diff) % n == 0
+        return answer("check", [[("✓" if ok else "✗", "")]])
+    if n > 1_000_000:
+        raise CalcError("модуль слишком большой")
+    v = syms[0]
+    num, den = sp.fraction(sp.together(diff))
+    if not (sp.Poly(num, v).is_ground or all(c.is_Integer for c in sp.Poly(num, v).all_coeffs())) or not den.is_Integer:
+        raise CalcError("по модулю решаются уравнения с целыми коэффициентами")
+    coeffs = [int(c) for c in sp.Poly(num, v).all_coeffs()]
+    roots = []
+    for r in range(n):
+        acc = 0
+        for c in coeffs:  # Horner's rule, everything modulo n
+            acc = (acc * r + c) % n
+        if acc == 0:
+            roots.append(r)
+    if not roots:
+        return answer("solve", [[W("нет решений") ]])
+    shown = roots[:12]
+    vals = ", ".join(str(r) for r in shown) + (", …" if len(roots) > len(shown) else "")
+    return answer("solve", [[X(v), (" ≡ " + vals + n_txt, r" \equiv " + vals + n_tex)]])
 
 
 def process_system(texts):
@@ -1709,7 +1815,7 @@ def _valid(text):
             return False
     if depth:
         return False
-    pieces, _ = split_relation(text)
+    pieces, _ = split_relation(re.sub(r"\bmod\b", "%", text))
     for p in pieces:
         if p.strip():
             try:
@@ -1740,7 +1846,7 @@ def evaluate_line(candidates, forced=False):
                 first_error = (" ".join(toks), {"error": "не удалось вычислить (%s)" % type(ex).__name__})
             continue
         # "2 x 3 =" or "2 + y =": a value was asked for, so a reading without letters is meant
-        if _is_value_request(text) and _has_symbols(text):
+        if _is_value_request(text) and _has_symbols(text) and not re.search(r"\bmod\b", text):
             alt = numeric_variant(toks)
             if alt is not None:
                 try:
@@ -1833,7 +1939,7 @@ def add_preview(text, res):
     if ops:
         return
     try:
-        line, _ = evaluate_trailing(text, True)
+        line, _ = evaluate_trailing(re.sub(r"\bmod\b", "%", text), True)
     except Exception:  # noqa: BLE001 - a preview is optional
         return
     if line:

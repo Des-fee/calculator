@@ -214,6 +214,20 @@ def test_numeric():
     assert out == ["x ≈ 2.5556046, y ≈ 2.8731345, z ≈ −13.817813"], out
 
 
+def test_mod_and_ode():
+    def run(toks):
+        return json.loads(ce.evaluate_document(json.dumps([{"id": "a", "type": "line", "tokens": toks.split()}])))[0]
+
+    assert run("3 x = 4 m o d 7")["answer"] == "x ≡ 6 (mod 7)"
+    assert run("x ^ { 2 } = 1 m o d 8")["answer"] == "x ≡ 1, 3, 5, 7 (mod 8)"
+    assert run("1 7 m o d 5 =")["answer"] == "2"
+    assert run("1 7 m o d 5")["preview"] == "2"
+    # y' = 2x is a differential equation in y(x), not 0 = 2x
+    assert run("y \\prime = 2 x")["answer"] == "y = C₁ + x²"
+    assert run("y ^ { \\prime \\prime } + y = 0")["answer"] == "y = C₁sin(x) + C₂cos(x)"
+    assert run("\\frac { d y } { d x } = y")["answer"] == "y = C₁eˣ"
+
+
 def test_plot():
     data = json.loads(ce.plot_points("y = 1/x", -1.0, 1.0, 5))
     assert data["ys"][2] is None and data["ys"][0] == -1.0, data
