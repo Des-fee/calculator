@@ -629,6 +629,34 @@ def safe_calc_line(glyphs, rng, tries=10):
 # Datasets
 # ---------------------------------------------------------------------------
 
+PERSONAL_REPEAT = int(os.environ.get("PERSONAL_REPEAT", "30"))
+
+
+def load_personal():
+    """Corrections exported from the app (menu ⋮ → «Мой почерк» → «Экспорт»): the user's own handwriting.
+    Returns (train, valid): every fifth sample is kept aside to measure accuracy on this handwriting."""
+    import glob
+    paths = sorted(set(glob.glob(os.environ.get("PERSONAL_SAMPLES", "/kaggle/input/**/calculator_samples*.jsonl"),
+                                 recursive=True)))
+    items, skipped = [], 0
+    for path in paths:
+        for line in open(path, encoding="utf-8"):
+            if not line.strip():
+                continue
+            o = json.loads(line)
+            toks = to_crohme(o.get("latex"))
+            strokes = [np.array(pts, dtype=np.float32).reshape(-1, 2) for pts in o.get("ink", []) if len(pts) >= 2]
+            if toks is None or not strokes:
+                skipped += 1
+                continue
+            items.append((normalise_units(strokes), toks))
+    if paths:
+        log("personal samples: %d from %s (%d skipped: no label the model can learn)" % (len(items), ", ".join(paths), skipped))
+    if len(items) < 25:
+        return items, []
+    return [it for k, it in enumerate(items) if k % 5], [it for k, it in enumerate(items) if k % 5 == 0]
+
+
 def load_crohme_train():
     out = []
     with zipfile.ZipFile(os.path.join(COMER_DIR, "data.zip")) as zf:
@@ -757,6 +785,7 @@ def exprate(model, items, beam=3 if SMOKE else 5):
 def main():
     log("device:", DEVICE, "| smoke" if SMOKE else "")
     train, synth, valid, glyphs = load_mathwriting()
+    personal, personal_valid = load_personal()
     missing = CALC_GLYPHS - set(glyphs)
     if missing:
         log("no isolated glyphs for", sorted(missing), "- calculator lines are generated without them")
@@ -780,9 +809,15 @@ def main():
     model.to(DEVICE).train()
     base_mw = exprate(model, valid)
     base_calc = exprate(model, calc_valid) if calc_valid else float("nan")
-    log("before training: ExpRate MathWriting valid %.1f%%, calculator lines %.1f%%" % (100 * base_mw, 100 * base_calc))
-    metrics = {"before": {"mathwriting_valid": base_mw, "calculator": base_calc}, "evals": []}
-    best = base_mw
+    base_pers = exprate(model, personal_valid) if personal_valid else None
+    log("before training: ExpRate MathWriting valid %.1f%%, calculator lines %.1f%%%s" % (
+        100 * base_mw, 100 * base_calc, "" if base_pers is None else ", your handwriting %.1f%%" % (100 * base_pers)))
+    metrics = {"before": {"mathwriting_valid": base_mw, "calculator": base_calc, "personal": base_pers}, "evals": []}
+
+    def score(mw, pers):  # the checkpoint kept is the best for MathWriting and the user's own writing together
+        return mw if pers is None else (mw + pers) / 2
+
+    best = score(base_mw, base_pers)
     save_model(model, hp, os.path.join(OUT_DIR, "comer_mathwriting.ckpt"), {"step": 0, "valid": base_mw})
 
     opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
@@ -793,7 +828,7 @@ def main():
     step, epoch, last_eval = 0, 0, time.time()
     done = False
     while not done:
-        ds = Mixed(train + synth, crohme, usable if calc_ok else None, epoch)
+        ds = Mixed(train + synth + personal * PERSONAL_REPEAT, crohme, usable if calc_ok else None, epoch)
         loader = torch.utils.data.DataLoader(ds, batch_sampler=batches(ds.sizes, random.Random(epoch)),
                                              collate_fn=collate, num_workers=0 if SMOKE else 4,
                                              persistent_workers=False, prefetch_factor=None if SMOKE else 4)
@@ -833,11 +868,13 @@ def main():
             if out_of_time or time.time() - last_eval > EVAL_EVERY_MIN * 60 or (SMOKE and step % 6 == 0):
                 v = exprate(model, valid)
                 c = exprate(model, calc_valid) if calc_valid else float("nan")
-                log("eval step %d: MathWriting valid %.1f%%, calculator %.1f%%" % (step, 100 * v, 100 * c))
-                metrics["evals"].append({"step": step, "mathwriting_valid": v, "calculator": c,
+                pv = exprate(model, personal_valid) if personal_valid else None
+                log("eval step %d: MathWriting valid %.1f%%, calculator %.1f%%%s" % (
+                    step, 100 * v, 100 * c, "" if pv is None else ", your handwriting %.1f%%" % (100 * pv)))
+                metrics["evals"].append({"step": step, "mathwriting_valid": v, "calculator": c, "personal": pv,
                                          "minutes": (time.time() - T0) / 60})
-                if v >= best:
-                    best = v
+                if score(v, pv) >= best:
+                    best = score(v, pv)
                     save_model(model, hp, os.path.join(OUT_DIR, "comer_mathwriting.ckpt"), {"step": step, "valid": v})
                     log("  saved best checkpoint")
                 save_model(model, hp, os.path.join(OUT_DIR, "last.ckpt"), {"step": step, "valid": v})
@@ -851,7 +888,13 @@ def main():
     metrics["best_mathwriting_valid"] = best
     with open(os.path.join(OUT_DIR, "metrics.json"), "w") as f:
         json.dump(metrics, f, indent=1)
-    log("done: best MathWriting valid ExpRate %.1f%% (was %.1f%%)" % (100 * best, 100 * base_mw))
+    if base_pers is None:
+        log("done: best MathWriting valid ExpRate %.1f%% (was %.1f%%)" % (100 * best, 100 * base_mw))
+    else:
+        last = metrics["evals"][-1] if metrics["evals"] else {}
+        log("done: best score %.1f%% (was %.1f%%); last eval: MathWriting %.1f%%, your handwriting %.1f%% (was %.1f%%)" % (
+            100 * best, 100 * score(base_mw, base_pers), 100 * last.get("mathwriting_valid", 0),
+            100 * (last.get("personal") or 0), 100 * base_pers))
 
 
 if __name__ == "__main__":

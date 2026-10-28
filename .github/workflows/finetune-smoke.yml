@@ -38,10 +38,27 @@ jobs:
           pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
           pip install onnx==1.17.0 onnxruntime==1.20.1 pytorch-lightning==2.4.0 einops pillow opencv-python-headless 2>&1 | tail -n 3
 
+      - name: Fake personal samples (as exported by the app)
+        run: |
+          mkdir -p smoke-samples
+          python - <<'EOF'
+          import json, random, sys
+          sys.path.insert(0, "tests")
+          from device_test import write
+          rng = random.Random(1)
+          with open("smoke-samples/calculator_samples.jsonl", "w") as f:
+              for k in range(30):
+                  a, b = rng.randint(1, 9), rng.randint(1, 9)
+                  strokes, _ = write("%d+%d" % (a, b), 20, 100)
+                  ink = [[v for p in s for v in p] for s in strokes]
+                  f.write(json.dumps({"ink": ink, "text": "%d+%d=" % (a, b), "latex": "%d + %d" % (a, b)}) + "\n")
+          EOF
+
       - name: Train a few steps on the excerpt
         run: |
           set -o pipefail
-          SMOKE=1 COMER_DIR=/tmp/CoMER OUT_DIR=smoke-out python -u model/finetune_mathwriting.py 2>&1 | tee build.log
+          SMOKE=1 COMER_DIR=/tmp/CoMER OUT_DIR=smoke-out PERSONAL_SAMPLES="smoke-samples/*.jsonl" \
+            python -u model/finetune_mathwriting.py 2>&1 | tee build.log
           cat smoke-out/metrics.json
           echo "::notice title=Data::$(grep -E 'MathWriting:|glyph|calculator|CROHME' build.log | tr '\n' '|' | cut -c1-3500)"
 

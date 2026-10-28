@@ -125,6 +125,10 @@ class MainActivity : Activity(), InkView.Listener {
         MathRender.init(this)
         setContentView(buildLayout())
         setStatus(getString(R.string.loading), null)
+        if (!prefs.getBoolean("help_seen", false)) {
+            prefs.edit().putBoolean("help_seen", true).apply()
+            ui.post { showHelp() }
+        }
         loadTestInk(intent)
         worker.execute { load() }
     }
@@ -325,14 +329,16 @@ class MainActivity : Activity(), InkView.Listener {
         val menu = PopupMenu(this, anchor)
         menu.menu.add(0, 3, 0, getString(R.string.menu_home))
         menu.menu.add(0, 4, 1, getString(R.string.menu_limit))
-        menu.menu.add(0, 1, 1, getString(R.string.menu_update))
-        menu.menu.add(0, 2, 2, getString(R.string.menu_help))
+        menu.menu.add(0, 5, 2, getString(R.string.menu_samples))
+        menu.menu.add(0, 2, 3, getString(R.string.menu_help))
+        menu.menu.add(0, 1, 4, getString(R.string.menu_update))
         menu.setOnMenuItemClickListener {
             when (it.itemId) {
                 1 -> startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(DOWNLOAD_URL)))
                 2 -> showHelp()
                 3 -> ink.scrollToStart()
                 4 -> chooseLimit()
+                5 -> showSamples()
             }
             true
         }
@@ -391,17 +397,45 @@ class MainActivity : Activity(), InkView.Listener {
         answerTextOf(r)?.let { copyText(it) }
     }
 
+    /** Full-screen guide: what the calculator understands and how to write it. */
     private fun showHelp() {
         val version = try {
             packageManager.getPackageInfo(packageName, 0).versionName
         } catch (e: Exception) {
             "?"
         }
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.app_name) + " " + version)
-            .setMessage(getString(R.string.help_text))
-            .setPositiveButton(android.R.string.ok, null)
-            .show()
+        val night = colors === Palette.dark
+        val dialog = Dialog(this, if (night) android.R.style.Theme_Material_NoActionBar else android.R.style.Theme_Material_Light_NoActionBar)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(colors.panel)
+        }
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dpi(16f), dpi(4f), dpi(4f), dpi(4f))
+        }
+        top.addView(TextView(this).apply {
+            text = getString(R.string.help_title)
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(colors.text)
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        top.addView(toolButton("✕", getString(R.string.close)) { dialog.dismiss() })
+        box.addView(top)
+        val body = TextView(this).apply {
+            @Suppress("DEPRECATION")
+            text = android.text.Html.fromHtml(getString(R.string.help_html) + "<p><small>Версия $version</small></p>")
+            textSize = 15f
+            setTextColor(colors.text)
+            setLineSpacing(0f, 1.15f)
+            setPadding(dpi(18f), dpi(4f), dpi(18f), dpi(24f))
+            setTextIsSelectable(true)
+        }
+        box.addView(android.widget.ScrollView(this).apply { addView(body) },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        dialog.setContentView(box)
+        dialog.show()
     }
 
     // ------------------------------------------------------------------ actions
@@ -492,8 +526,10 @@ class MainActivity : Activity(), InkView.Listener {
             .setTitle(R.string.fix_title)
             .setView(box)
             .setPositiveButton(android.R.string.ok) { _, _ ->
-                overrides[key] = field.text.toString()
+                val corrected = field.text.toString()
+                overrides[key] = corrected
                 scheduleRecognition()
+                saveSample(key, corrected, current)
             }
             .setNeutralButton(R.string.fix_reset) { _, _ ->
                 overrides.remove(key)
@@ -501,6 +537,71 @@ class MainActivity : Activity(), InkView.Listener {
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    /** Keep the ink of a corrected line with the right answer, for fine-tuning on this handwriting. */
+    private fun saveSample(lineKey: String, corrected: String, recognized: String) {
+        if (corrected.isBlank() || corrected.trim() == recognized.trim()) return
+        val ids = lineKey.split(",").mapNotNull { it.toLongOrNull() }.toSet()
+        val strokes = ink.snapshot().filter { it.id in ids }
+        if (strokes.isEmpty()) return
+        val eng = engine
+        worker.execute {
+            // the model never sees a trailing "=" (it is cut off before recognition), so neither does the sample
+            val eq = InkGeometry.trailingEquals(InkLine(strokes))
+            val body = if (eq != null) strokes.filter { it !in eq } else strokes
+            val label = try {
+                eng?.trainingLabel(corrected)
+            } catch (e: Exception) {
+                null
+            }
+            Samples.save(this, body, corrected, label, recognized)
+            val n = Samples.count(this)
+            ui.post {
+                android.widget.Toast.makeText(this, getString(R.string.sample_saved, n), android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun showSamples() {
+        val n = Samples.count(this)
+        val d = AlertDialog.Builder(this)
+            .setTitle(R.string.menu_samples)
+            .setMessage(getString(R.string.samples_text, n))
+            .setNegativeButton(R.string.close, null)
+        if (n > 0) {
+            d.setPositiveButton(R.string.samples_export) { _, _ ->
+                val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "application/octet-stream"
+                    putExtra(Intent.EXTRA_TITLE, "calculator_samples.jsonl")
+                }
+                @Suppress("DEPRECATION")
+                startActivityForResult(intent, REQUEST_EXPORT)
+            }
+            d.setNeutralButton(R.string.samples_clear) { _, _ ->
+                AlertDialog.Builder(this)
+                    .setMessage(getString(R.string.samples_clear_confirm, n))
+                    .setPositiveButton(R.string.samples_clear) { _, _ -> Samples.clear(this) }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            }
+        }
+        d.show()
+    }
+
+    @Deprecated("Activity result API of android.app.Activity")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        val uri = data?.data
+        if (requestCode != REQUEST_EXPORT || resultCode != RESULT_OK || uri == null) return
+        try {
+            contentResolver.openOutputStream(uri)?.use { it.write(Samples.read(this)) }
+            android.widget.Toast.makeText(this, getString(R.string.samples_exported, Samples.count(this)), android.widget.Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(this, e.message ?: "ошибка", android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun openGraphForFocused() {
@@ -784,6 +885,7 @@ class MainActivity : Activity(), InkView.Listener {
     }
 
     companion object {
+        const val REQUEST_EXPORT = 42
         const val PAUSE_MS = 700L
         const val TAG = "Calc"
         const val DOWNLOAD_URL = "https://github.com/Des-fee/calculator/releases/latest/download/calculator.apk"

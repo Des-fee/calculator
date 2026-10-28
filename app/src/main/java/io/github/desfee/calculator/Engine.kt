@@ -70,6 +70,10 @@ class Engine(context: Context) {
         return evaluate(items).getValue("kb")
     }
 
+    /** LaTeX label of a corrected line for fine-tuning, or null. */
+    fun trainingLabel(text: String): String? =
+        module.callAttr("training_label", text)?.toString()?.takeIf { it != "None" }
+
     class Plot(val xs: DoubleArray, val ys: Array<Double?>, val label: String)
 
     fun plot(expr: String, xmin: Double, xmax: Double, n: Int): Plot {

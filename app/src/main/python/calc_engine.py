@@ -1064,6 +1064,19 @@ def text_to_tex(text):
         return None
 
 
+def training_label(text):
+    """LaTeX label of a corrected line for fine-tuning (as written; the trailing "=" is cut off like the
+    app cuts it off the ink). None when the text cannot be parsed."""
+    t = re.sub(r"\bmod\b", "%", text.strip())
+    t = re.sub(r"=\s*$", "", t).strip()
+    if not t:
+        return None
+    tex = text_to_tex(t)
+    if tex and "×" in text:  # the user wrote a cross, not a dot
+        tex = tex.replace(r"\cdot", r"\times")
+    return tex
+
+
 def system_tex(texts):
     lines = [text_to_tex(t) for t in texts]
     if any(t is None for t in lines):
