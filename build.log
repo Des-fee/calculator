@@ -1,0 +1,56 @@
+[   0.0 min] device: cpu | smoke
+[   0.0 min] downloading and parsing https://storage.googleapis.com/mathwriting_data/mathwriting-2024-excerpt.tgz
+[   0.0 min] MathWriting: train 77, synthetic 31, valid 87 (skipped 38 with symbols the model does not know)
+[   0.0 min] isolated glyphs: {'+': 2, '.': 3, '/': 1, '0': 2, '1': 2, '2': 1, '3': 3, '5': 2, '9': 1, '<': 1, '=': 2, '>': 3, 'A': 1, '\\Rightarrow': 1, '\\approx': 2, '\\cap': 1, '\\cdot': 9, '\\equiv': 1, '\\in': 1, '\\nabla': 2, '\\partial': 2, '\\sum': 1, '\\times': 1, 'b': 2, 'c': 2, 'd': 1, 'i': 3, 'l': 4, 'n': 1, 'p': 3, 'q': 2, 't': 1}
+[   0.0 min] all glyph labels: * + , . / 0 1 2 3 5 9 ; < = > A C E F G H J K L M N O P Q R S T U X Y \# \Delta \Leftrightarrow \Omega \Pi \Psi \Rightarrow \Sigma \Upsilon \Vdash \Xi \angle \approx \backslash \beta \cap \cdot \dagger \dot \emptyset \epsilon \equiv \eta \forall \frac \hookrightarrow \iff \iint \in \iota \kappa \lambda \lceil \le \lfloor \longrightarrow \mapsto \mathbb{C} \mathbb{E} \mathbb{I} \mathbb{Q} \mathbb{R} \mathbb{S} \mathbb{Z} \mu \nabla \ne \notin \nu \oint \omega \ominus \oplus \otimes \partial \perp \pm \prime \rceil \rfloor \sigma \simeq \sqrt \subseteq \sum \supseteq \theta \tilde \times \top \upsilon \varsigma \vartheta \vec \xi \zeta b c d e h i j k l n o p q s t v w |
+[   0.0 min] personal samples: 30 from smoke-samples/calculator_samples.jsonl (0 skipped: no label the model can learn)
+[   0.0 min] no isolated glyphs for ['(', ')', '-', '4', '6', '7', '8', ':', 'B', '\\%', '\\cup', '\\div', '\\infty', '\\int', '\\neg', '\\rightarrow', '\\vee', '\\wedge', 'a', 'f', 'm', 'x', 'y'] - calculator lines are generated without them
+[   0.0 min] not enough glyphs for calculator lines; they are skipped
+[   0.0 min] CROHME train images: 60
+[   0.0 min] grew decoder.word_embed.0.weight from 113 to 206 tokens
+[   0.0 min] grew decoder.proj.weight from 113 to 206 tokens
+[   0.0 min] grew decoder.proj.bias from 113 to 206 tokens
+[   2.6 min] before training: ExpRate MathWriting valid 10.0%, calculator lines nan%, your handwriting 100.0%
+[   2.6 min] epoch 0: 888 samples
+[   2.6 min] step 5  loss 0.6291  lr 4.98e-05
+[   5.3 min] eval step 6: MathWriting valid 10.0%, calculator nan%, your handwriting 100.0%
+[   5.3 min]   saved best checkpoint
+[   7.9 min] eval step 7: MathWriting valid 10.0%, calculator nan%, your handwriting 100.0%
+[   7.9 min]   saved best checkpoint
+[   7.9 min] done: best score 55.0% (was 55.0%); last eval: MathWriting 10.0%, your handwriting 100.0% (was 100.0%)
+/opt/hostedtoolcache/Python/3.11.17/x64/lib/python3.11/site-packages/torch/onnx/_internal/jit_utils.py:308: UserWarning: Constant folding - Only steps=1 can be constant folded for opset >= 10 onnx::Slice op. Constant folding not applied. (Triggered internally at ../torch/csrc/jit/passes/onnx/constant_fold.cpp:178.)
+  _C._jit_pass_onnx_node_shape_type_inference(node, params_dict, opset_version)
+/opt/hostedtoolcache/Python/3.11.17/x64/lib/python3.11/site-packages/torch/onnx/utils.py:663: UserWarning: Constant folding - Only steps=1 can be constant folded for opset >= 10 onnx::Slice op. Constant folding not applied. (Triggered internally at ../torch/csrc/jit/passes/onnx/constant_fold.cpp:178.)
+  _C._jit_pass_onnx_graph_shape_type_inference(
+/opt/hostedtoolcache/Python/3.11.17/x64/lib/python3.11/site-packages/torch/onnx/utils.py:1186: UserWarning: Constant folding - Only steps=1 can be constant folded for opset >= 10 onnx::Slice op. Constant folding not applied. (Triggered internally at ../torch/csrc/jit/passes/onnx/constant_fold.cpp:178.)
+  _C._jit_pass_onnx_graph_shape_type_inference(
+/home/runner/work/calculator/calculator/model/export_onnx.py:145: TracerWarning: torch.tensor results are registered as constants in the trace. You can safely ignore this warning if you use this function to create tensors out of constant variables that would be the same every time you call this function. In any other case, this might cause the trace to be incorrect.
+  target = torch.cat((torch.tensor([-1, 2 * self.nhead], dtype=torch.long), hw))
+vocabulary from the checkpoint: 206 tokens
+check 23_em_52 feat_err=0.00e+00 dec_err=3.81e-06
+check 513_em_320 feat_err=0.00e+00 dec_err=1.91e-06
+check RIT_2014_29 feat_err=0.00e+00 dec_err=1.91e-06
+check RIT_2014_95 feat_err=0.00e+00 dec_err=1.91e-06
+check RIT_2014_97 feat_err=0.00e+00 dec_err=1.91e-06
+check 29_em_151 feat_err=0.00e+00 dec_err=1.91e-06
+check RIT_2014_57 feat_err=0.00e+00 dec_err=1.91e-06
+check 517_em_404 feat_err=0.00e+00 dec_err=1.91e-06
+onnx 23_em_52 (71, 71) B=1 L=2 feat_err=2.86e-06 dec_err=6.68e-06
+onnx 513_em_320 (56, 55) B=1 L=2 feat_err=2.38e-06 dec_err=1.34e-05
+onnx RIT_2014_29 (54, 53) B=1 L=2 feat_err=3.34e-06 dec_err=3.81e-06
+onnx RIT_2014_95 (58, 74) B=1 L=2 feat_err=4.05e-06 dec_err=1.14e-05
+onnx RIT_2014_97 (57, 66) B=1 L=2 feat_err=3.81e-06 dec_err=1.05e-05
+onnx 29_em_151 (73, 84) B=1 L=2 feat_err=3.10e-06 dec_err=6.68e-06
+OK    2 p | 2 p
+OK    k N | k N
+OK    - 7 | - 7
+OK    2 0 | 2 0
+OK    1 2 | 1 2
+MISS  P a | p _ { a }
+OK    1 9 | 1 9
+MISS  P a | P a }
+OK    2 6 | 2 6
+OK    1 m | 1 m
+ExpRate on 10 CROHME-2014 images: 80.0%
+/home/runner/work/calculator/calculator/smoke-onnx/encoder.onnx 12373 KiB
+/home/runner/work/calculator/calculator/smoke-onnx/decoder.onnx 13375 KiB

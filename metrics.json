@@ -1,0 +1,24 @@
+{
+ "before": {
+  "mathwriting_valid": 0.1,
+  "calculator": NaN,
+  "personal": 1.0
+ },
+ "evals": [
+  {
+   "step": 6,
+   "mathwriting_valid": 0.1,
+   "calculator": NaN,
+   "personal": 1.0,
+   "minutes": 5.3098523139953615
+  },
+  {
+   "step": 7,
+   "mathwriting_valid": 0.1,
+   "calculator": NaN,
+   "personal": 1.0,
+   "minutes": 7.905038086573283
+  }
+ ],
+ "best_mathwriting_valid": 0.55
+}
