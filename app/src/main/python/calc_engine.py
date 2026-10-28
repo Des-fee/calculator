@@ -1134,6 +1134,174 @@ def simplify_value(expr):
 
 
 MAX_ROOTS = 6
+EXACT_SOLVE_SECONDS = 3.0
+
+
+def _solve_or_none(fn):
+    """sp.solve with a short time limit: None when there is no formula or it takes too long."""
+    box = {}
+
+    def target():
+        try:
+            box["r"] = fn()
+        except NotImplementedError:
+            box["r"] = None
+        except _Timeout:
+            box["r"] = None
+        except BaseException as ex:  # noqa: BLE001
+            box["e"] = ex
+
+    t = threading.Thread(target=target, daemon=True)
+    t.start()
+    t.join(EXACT_SOLVE_SECONDS)
+    if t.is_alive():
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(t.ident), ctypes.py_object(_Timeout))
+        t.join(1.0)
+        return None
+    if "e" in box:
+        raise box["e"]
+    return box.get("r")
+
+
+def _real_fn(expr, var):
+    f = sp.lambdify(var, expr, modules="mpmath")
+
+    def g(x):
+        try:
+            v = f(mpmath.mpf(x))
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            return None
+        if isinstance(v, mpmath.mpc):
+            if abs(v.imag) > 1e-12 * max(1, abs(v.real)):
+                return None
+            v = v.real
+        return v if mpmath.isfinite(v) else None
+    return g
+
+
+def numeric_roots(expr, var, limit=1e4):
+    """Real roots of expr = 0: sign changes on a dense grid (denser near 0), refined with bisection-safe
+    secant steps; plus local minima of |f| touching zero (double roots)."""
+    g = _real_fn(expr, var)
+    xs = sorted(set([0.0] + [s * 10 ** (k / 40.0) for k in range(-160, int(40 * math.log10(limit)) + 1) for s in (1, -1)]))
+    vals = [(x, g(x)) for x in xs]
+    roots = []
+
+    def add(r):
+        if all(abs(r - q) > 1e-7 * max(1, abs(r)) for q in roots):
+            roots.append(r)
+
+    for (x0, f0), (x1, f1) in zip(vals, vals[1:]):
+        if f0 is None or f1 is None:
+            continue
+        if f0 == 0:
+            add(float(x0))
+        elif f0 * f1 < 0:
+            lo, hi, flo = mpmath.mpf(x0), mpmath.mpf(x1), f0
+            ok = True
+            for _ in range(200):  # bisection: slow but never jumps to another root
+                mid = (lo + hi) / 2
+                fm = g(mid)
+                if fm is None:
+                    ok = False
+                    break
+                if fm == 0 or hi - lo < 1e-25 * max(1, abs(mid)):
+                    break
+                if (fm < 0) == (flo < 0):
+                    lo, flo = mid, fm
+                else:
+                    hi = mid
+            if ok and abs(g((lo + hi) / 2) or 0) < 1e-6 * max(1, abs(f0), abs(f1)):  # not a pole like 1/x
+                add(float((lo + hi) / 2))
+    for (xa, fa), (xb, fb), (xc, fc) in zip(vals, vals[1:], vals[2:]):  # touching roots (x^2 = 0)
+        if None not in (fa, fb, fc) and abs(fb) < 1e-9 and abs(fb) <= abs(fa) and abs(fb) <= abs(fc):
+            add(float(xb))
+    return sorted(roots)
+
+
+def _solve_linear(A, b):
+    """Gaussian elimination with partial pivoting; None when singular."""
+    n = len(b)
+    M = [row[:] + [b[i]] for i, row in enumerate(A)]
+    for c in range(n):
+        p = max(range(c, n), key=lambda r: abs(M[r][c]))
+        if abs(M[p][c]) < 1e-300:
+            return None
+        M[c], M[p] = M[p], M[c]
+        for r in range(c + 1, n):
+            k = M[r][c] / M[c][c]
+            for j in range(c, n + 1):
+                M[r][j] -= k * M[c][j]
+    x = [0.0] * n
+    for r in range(n - 1, -1, -1):
+        x[r] = (M[r][n] - sum(M[r][j] * x[j] for j in range(r + 1, n))) / M[r][r]
+    return x
+
+
+def _newton(F, J, x, steps=60):
+    """Damped Newton's method in real floating point; None when it fails from this start."""
+    try:
+        fx = F(x)
+        for _ in range(steps):
+            norm = max(abs(v) for v in fx)
+            if norm < 1e-13:
+                return x
+            dx = _solve_linear(J(x), [-v for v in fx])
+            if dx is None:
+                return None
+            t = 1.0
+            while t > 1e-6:  # halve the step until the residual drops
+                nx = [a + t * d for a, d in zip(x, dx)]
+                if max(abs(v) for v in nx) > 1e8:
+                    return None
+                try:
+                    nf = F(nx)
+                except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+                    nf = None
+                if nf is not None and max(abs(v) for v in nf) < norm:
+                    x, fx = nx, nf
+                    break
+                t /= 2
+            else:
+                return None
+        return x if max(abs(v) for v in fx) < 1e-9 else None
+    except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+        return None
+
+
+def numeric_system(eqs, symbols, tries=60, seconds=5.0):
+    """Real solutions of a system without a formula: Newton's method from many starting points."""
+    import random
+    import time
+    exprs = [e.lhs - e.rhs for e in eqs]
+    # plain floats: a negative number to a fractional power is an error (not a complex number), so only
+    # real solutions are followed, and every step takes microseconds
+    fs = [sp.lambdify(symbols, e, modules="math") for e in exprs]
+    jac = [[sp.lambdify(symbols, sp.diff(e, v), modules="math") for v in symbols] for e in exprs]
+
+    def real(v):
+        if isinstance(v, complex):
+            raise ValueError
+        return float(v)
+
+    F = lambda x: [real(f(*x)) for f in fs]  # noqa: E731
+    J = lambda x: [[real(d(*x)) for d in row] for row in jac]  # noqa: E731
+    rng = random.Random(7)
+    starts = [[c] * len(symbols) for c in (1.0, 2.0, 0.5, -1.0, 3.0, -2.0)]
+    starts += [[rng.choice([-1, 1]) * 10 ** rng.uniform(-1, 1.2) for _ in symbols] for _ in range(tries)]
+    found = []
+    t0 = time.time()
+    idle = 0  # starts in a row that found nothing new
+    for st in starts:
+        if time.time() - t0 > seconds or len(found) >= MAX_ROOTS or (found and idle >= 20):
+            break
+        vals = _newton(F, J, st)
+        if vals is not None and all(max(abs(a - b) for a, b in zip(vals, f)) > 1e-6 for f in found):
+            found.append(vals)
+            idle = 0
+        else:
+            idle += 1
+    return sorted(found)
 
 
 def assign(name, value):
@@ -1147,7 +1315,24 @@ def solve_equation(eq, decimal):
     """Answer lines, one per root."""
     symbols = order_vars(eq.free_symbols)
     var = symbols[0]
-    sols = sp.solve(eq, var, dict=False)
+    sols = _solve_or_none(lambda: sp.solve(eq, var, dict=False))
+    if sols is None:
+        # no formula (2^x = x^2 + 1, cos x = x): find the real roots numerically
+        if len(symbols) > 1:
+            raise CalcError("для такого уравнения нет формулы; численно решается только с одной переменной")
+        roots = numeric_roots(eq.lhs - eq.rhs, var)
+        if not roots:
+            return [[W("действительных корней не найдено")]]
+        more = 0
+        if len(roots) > MAX_ROOTS:  # periodic functions have endlessly many: show those nearest to 0
+            more = len(roots) - MAX_ROOTS
+            roots = sorted(sorted(roots, key=abs)[:MAX_ROOTS])
+        name = lambda k: (fmt(var) + (str(k).translate(SUB) if len(roots) > 1 else ""),
+                          "{%s}_{%d}" % (to_tex(var), k) if len(roots) > 1 else to_tex(var))
+        lines = [[name(k), O("≈"), NUM(r, 10)] for k, r in enumerate(roots, 1)]
+        if more:
+            lines.append([W("… ещё %d в пределах ±10000" % more)])
+        return lines
     if not sols:
         # identity?
         diff = sp.simplify(eq.lhs - eq.rhs)
@@ -1244,7 +1429,23 @@ def solve_system(eqs, decimal):
     symbols = order_vars(set().union(*[e.free_symbols for e in eqs]))
     if not symbols:
         raise CalcError("в системе нет переменных")
-    sols = sp.solve(eqs, symbols, dict=True)
+    sols = _solve_or_none(lambda: sp.solve(eqs, symbols, dict=True))
+    if sols is None:
+        # no formula (x^x = 11 together with x^y …): solve numerically
+        if len(eqs) != len(symbols):
+            raise CalcError("для такой системы нет формулы; численно решается, когда уравнений столько же, сколько неизвестных")
+        found = numeric_system(eqs, symbols)
+        if not found:
+            return [[W("действительных решений не найдено")]]
+        lines = []
+        for vals in found:
+            line = []
+            for v, val in zip(symbols, vals):
+                if line:
+                    line.append((", ", r",\quad "))
+                line += [X(v), O("≈"), NUM(val, 8)]
+            lines.append(line)
+        return lines
     if not sols:
         return [[W("нет решений")]]
     real = [s for s in sols if all(v.is_real is not False for v in s.values())]

@@ -206,6 +206,14 @@ def test_letters_primes_exact():
     assert "exact" not in run("2 + 2 =")
 
 
+def test_numeric():
+    # no formula: real roots found numerically
+    assert ce.process("cos(x) = x")["answer"] == "x ≈ 0.7390851332"
+    assert ce.process("2^x = x^2 + 1")["answer"] == "x₁ ≈ 0; x₂ ≈ 1; x₃ ≈ 4.257461914"
+    out = [ce.line_text(l) for l in ce.process_system(["x^3 + z = y", "x^y + z = 1", "x^x = 11"])]
+    assert out == ["x ≈ 2.5556046, y ≈ 2.8731345, z ≈ −13.817813"], out
+
+
 def test_plot():
     data = json.loads(ce.plot_points("y = 1/x", -1.0, 1.0, 5))
     assert data["ys"][2] is None and data["ys"][0] == -1.0, data
