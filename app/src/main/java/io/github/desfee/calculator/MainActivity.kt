@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
 import kotlin.math.min
 
-class MainActivity : Activity(), InkView.Listener {
+class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
     private lateinit var colors: Palette
     private lateinit var ink: InkView
     private lateinit var inputLabel: TextView
@@ -48,8 +48,14 @@ class MainActivity : Activity(), InkView.Listener {
     private lateinit var timerView: TextView
     private lateinit var graphButton: TextView
     private lateinit var eraserButton: TextView
-    private lateinit var keyboardRow: LinearLayout
-    private lateinit var keyboardInput: EditText
+    private lateinit var panel: LinearLayout
+    private lateinit var editor: MathEditor
+
+    /** The answer for the editor's text, and the item being corrected (null when typing a new calculation). */
+    private var editorResult: Engine.Result? = null
+    private var editorItemId: String? = null
+    private var editorText = ""
+    private val editorEval = Runnable { evaluateEditor() }
 
     private val ui = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
@@ -63,12 +69,18 @@ class MainActivity : Activity(), InkView.Listener {
     private val overrides = HashMap<String, String>()
 
     /** Geometry and last result of each item on the page, by item id. */
-    private class Item(val id: String, val lineKey: String?, val bounds: android.graphics.RectF, val charHeight: Float)
+    /** A line ([lineKey]) or a system ([lineKeys] of its lines, top to bottom) on the page. */
+    private class Item(
+        val id: String,
+        val lineKey: String?,
+        val bounds: android.graphics.RectF,
+        val charHeight: Float,
+        val lineKeys: List<String> = emptyList(),
+    )
 
     private var items: Map<String, Item> = emptyMap()
     private var results: Map<String, Engine.Result> = emptyMap()
     private var focusedId: String? = null
-    private var keyboardResult: Engine.Result? = null
     private var lastStrokeX = 0f
     private var lastStrokeY = 0f
 
@@ -223,7 +235,7 @@ class MainActivity : Activity(), InkView.Listener {
         eraserButton = toolButton("⌫", getString(R.string.eraser)) { toggleEraser() }
         bar.addView(eraserButton)
         bar.addView(toolButton("✕", getString(R.string.clear)) { clearAll() })
-        bar.addView(toolButton("⌨", getString(R.string.keyboard)) { toggleKeyboard() })
+        bar.addView(toolButton("⌨", getString(R.string.keyboard)) { openCalcEditor() })
         val menuButton = toolButton("⋮", getString(R.string.menu)) {}
         menuButton.setOnClickListener { showMenu(menuButton) }
         bar.addView(menuButton)
@@ -234,7 +246,7 @@ class MainActivity : Activity(), InkView.Listener {
         root.addView(ink, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         // result panel
-        val panel = LinearLayout(this).apply {
+        panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dpi(16f), dpi(10f), dpi(16f), dpi(12f))
         }
@@ -258,7 +270,7 @@ class MainActivity : Activity(), InkView.Listener {
             addView(v)
         }
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        editButton = chip("✎ " + getString(R.string.fix)) { editFocused() }
+        editButton = chip("✎ " + getString(R.string.fix)) { openFixEditor() }
         copyButton = chip("⧉ " + getString(R.string.copy)) { copyFocused() }
         exactButton = chip(getString(R.string.exact)) { toggleExact() }
         graphButton = chip("📈 " + getString(R.string.graph)) { openGraphForFocused() }
@@ -283,45 +295,9 @@ class MainActivity : Activity(), InkView.Listener {
         panel.addView(timerView)
         panel.addView(scrolled(actions))
 
-        // keyboard input (hidden by default)
-        keyboardRow = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = View.GONE
-            setPadding(0, dpi(8f), 0, 0)
-        }
-        val entry = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        keyboardInput = EditText(this).apply {
-            hint = getString(R.string.keyboard_hint)
-            setTextColor(colors.text)
-            setHintTextColor(colors.muted)
-            textSize = 18f
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            imeOptions = EditorInfo.IME_ACTION_DONE
-            maxLines = 4
-            setOnEditorActionListener { _, actionId, event ->
-                if (actionId == EditorInfo.IME_ACTION_DONE || event?.keyCode == KeyEvent.KEYCODE_ENTER) {
-                    computeKeyboard(); true
-                } else false
-            }
-        }
-        entry.addView(keyboardInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        entry.addView(chip(" = ") { computeKeyboard() })
-        val keys = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        for (k in listOf("x", "y", "^", "√", "π", "(", ")", "sin", "cos", "ln", "∫", "d/dx", ",")) {
-            keys.addView(chip(k) { insertKey(k) })
-        }
-        val scroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(keys)
-            setPadding(0, dpi(6f), 0, 0)
-        }
-        keyboardRow.addView(entry)
-        keyboardRow.addView(scroll)
-        panel.addView(keyboardRow)
+        editor = MathEditor(this, colors, this).apply { visibility = View.GONE }
         root.addView(panel)
+        root.addView(editor)
         return root
     }
 
@@ -360,10 +336,7 @@ class MainActivity : Activity(), InkView.Listener {
             .show()
     }
 
-    private fun shownResult(): Engine.Result? {
-        val kb = keyboardResult
-        return if (keyboardRow.visibility == View.VISIBLE && kb != null) kb else focusedId?.let { results[it] }
-    }
+    private fun shownResult(): Engine.Result? = focusedId?.let { results[it] }
 
     private fun exactKey(r: Engine.Result) = r.id + "|" + r.exact
 
@@ -392,9 +365,7 @@ class MainActivity : Activity(), InkView.Listener {
     }
 
     private fun copyFocused() {
-        val kb = keyboardResult
-        val r = if (keyboardRow.visibility == View.VISIBLE && kb != null) kb else focusedId?.let { results[it] }
-        answerTextOf(r)?.let { copyText(it) }
+        answerTextOf(shownResult())?.let { copyText(it) }
     }
 
     /** Full-screen guide: what the calculator understands and how to write it. */
@@ -454,89 +425,136 @@ class MainActivity : Activity(), InkView.Listener {
         updatePanel()
     }
 
-    private fun toggleKeyboard() {
-        val show = keyboardRow.visibility != View.VISIBLE
-        keyboardRow.visibility = if (show) View.VISIBLE else View.GONE
-        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-        if (show) {
-            keyboardInput.requestFocus()
-            imm.showSoftInput(keyboardInput, InputMethodManager.SHOW_IMPLICIT)
-        } else {
-            imm.hideSoftInputFromWindow(keyboardInput.windowToken, 0)
-            keyboardResult = null
-            updatePanel()
-        }
+    // ------------------------------------------------------------------ editor (typing and corrections)
+
+    private fun openCalcEditor() {
+        editorItemId = null
+        editorResult = null
+        editor.open(MathEditor.Mode.CALC, editorText.takeIf { editor.mode == MathEditor.Mode.CALC } ?: "",
+            getString(R.string.editor_calc))
+        panel.visibility = View.GONE
     }
 
-    private fun insertKey(k: String) {
-        val text = when (k) {
-            "sin", "cos", "ln" -> "$k("
-            "∫" -> "int("
-            "d/dx" -> "diff("
-            else -> k
-        }
-        val start = max(keyboardInput.selectionStart, 0)
-        val end = max(keyboardInput.selectionEnd, 0)
-        keyboardInput.text.replace(min(start, end), max(start, end), text)
-    }
-
-    private fun computeKeyboard() {
-        val text = keyboardInput.text.toString()
-        if (text.isBlank()) return
+    /** Correct the focused line or system: its recognised text in keyboard form, editable with the math keypad. */
+    private fun openFixEditor() {
+        val id = focusedId ?: return
+        val item = items[id] ?: return
+        val r = results[id]
         val eng = engine ?: return
+        val raw = item.lineKey?.let { overrides[it] } ?: r?.input ?: ""
         background {
+            val text = try {
+                if (item.lineKey == null) raw.split(";").joinToString("; ") { eng.editableText(it.trim()) } else eng.editableText(raw)
+            } catch (e: Exception) {
+                raw
+            }
+            ui.post {
+                editorItemId = id
+                editorResult = null
+                editor.open(MathEditor.Mode.FIX, text,
+                    getString(if (item.lineKey == null) R.string.editor_fix_system else R.string.editor_fix_line))
+                panel.visibility = View.GONE
+            }
+        }
+    }
+
+    private fun closeEditor() {
+        editor.close()
+        editorItemId = null
+        panel.visibility = View.VISIBLE
+        updatePanel()
+    }
+
+    override fun onEditorText(text: String) {
+        if (editor.mode == MathEditor.Mode.CALC) editorText = text
+        ui.removeCallbacks(editorEval)
+        ui.postDelayed(editorEval, 250)
+    }
+
+    /** Live preview: the typeset formula and its answer while typing. */
+    private fun evaluateEditor() {
+        val text = editor.input.text.toString()
+        val eng = engine ?: return
+        if (text.isBlank()) {
+            editor.showPreview(null, "")
+            editor.showResult(null, "", muted = true, canCopy = false, canGraph = false)
+            editorResult = null
+            return
+        }
+        background {
+            val tex = try { eng.texOf(text) } catch (e: Exception) { null }
             val r = try {
                 eng.evaluateText(text)
             } catch (e: Exception) {
                 Engine.Result("kb", text, "error", null, null, e.message)
             }
             ui.post {
-                keyboardResult = r
-                updatePanel()
+                if (editor.input.text.toString() != text) return@post
+                editorResult = r
+                editor.showPreview(tex, if (tex == null) text else "")
+                val (rTex, rText, muted) = when {
+                    r.error != null -> Triple(null, if (tex == null) getString(R.string.editor_incomplete) else r.error, true)
+                    r.kind == "function" -> Triple(null, getString(R.string.function_hint), true)
+                    r.answer != null -> Triple(r.tex, r.answer.replace("\n", "\n"), false)
+                    else -> Triple(null, "", true)
+                }
+                editor.showResult(rTex?.map { "= $it".takeIf { _ -> r.kind == "value" } ?: it }, rText, muted,
+                    canCopy = answerTextOf(r) != null, canGraph = r.plot != null)
             }
         }
     }
 
-    private fun editFocused() {
-        val kb = keyboardResult
-        if (kb != null && keyboardRow.visibility == View.VISIBLE) {
-            keyboardInput.requestFocus()
+    override fun onEditorApply(text: String) {
+        if (editor.mode == MathEditor.Mode.CALC) {
+            evaluateEditor()
             return
         }
-        val id = focusedId ?: return
-        val item = items[id] ?: return
-        val key = item.lineKey
-        val current = results[id]?.input ?: ""
-        if (key == null) {
-            // a system: let the user retype it on the keyboard
-            if (keyboardRow.visibility != View.VISIBLE) toggleKeyboard()
-            keyboardInput.setText(current)
-            return
-        }
-        val field = EditText(this).apply {
-            setText(overrides[key] ?: current)
-            setSelection(text.length)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        }
-        val box = LinearLayout(this).apply {
-            setPadding(dpi(20f), dpi(8f), dpi(20f), 0)
-            addView(field, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        }
-        AlertDialog.Builder(this)
-            .setTitle(R.string.fix_title)
-            .setView(box)
-            .setPositiveButton(android.R.string.ok) { _, _ ->
-                val corrected = field.text.toString()
-                overrides[key] = corrected
-                scheduleRecognition()
-                saveSample(key, corrected, current)
+        val id = editorItemId ?: return closeEditor()
+        val item = items[id] ?: return closeEditor()
+        val recognized = results[id]?.input ?: ""
+        val single = item.lineKey
+        if (single != null) {
+            overrides[single] = text
+            saveSample(single, text, recognized)
+        } else {
+            // a system: one statement per line of the system, separated by ";"
+            val parts = text.split(";").map { it.trim() }.filter { it.isNotEmpty() }
+            if (parts.size != item.lineKeys.size) {
+                android.widget.Toast.makeText(this, getString(R.string.editor_system_lines, item.lineKeys.size), android.widget.Toast.LENGTH_LONG).show()
+                return
             }
-            .setNeutralButton(R.string.fix_reset) { _, _ ->
-                overrides.remove(key)
-                scheduleRecognition()
+            val before = recognized.split(";").map { it.trim() }
+            for ((k, key) in item.lineKeys.withIndex()) {
+                overrides[key] = parts[k]
+                saveSample(key, parts[k], before.getOrElse(k) { "" })
             }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        }
+        closeEditor()
+        scheduleRecognition()
+    }
+
+    override fun onEditorReset() {
+        val id = editorItemId
+        val item = id?.let { items[it] }
+        item?.lineKey?.let { overrides.remove(it) }
+        item?.lineKeys?.forEach { overrides.remove(it) }
+        closeEditor()
+        scheduleRecognition()
+    }
+
+    override fun onEditorClose() = closeEditor()
+
+    override fun onEditorCopy() {
+        answerTextOf(editorResult)?.let { copyText(it) }
+    }
+
+    override fun onEditorGraph() {
+        editorResult?.plot?.let { openGraph(it) }
+    }
+
+    @Deprecated("Back handling of android.app.Activity")
+    override fun onBackPressed() {
+        if (editor.visibility == View.VISIBLE) closeEditor() else @Suppress("DEPRECATION") super.onBackPressed()
     }
 
     /** Keep the ink of a corrected line with the right answer, for fine-tuning on this handwriting. */
@@ -605,8 +623,7 @@ class MainActivity : Activity(), InkView.Listener {
     }
 
     private fun openGraphForFocused() {
-        val r = if (keyboardRow.visibility == View.VISIBLE && keyboardResult != null) keyboardResult else focusedId?.let { results[it] }
-        val expr = r?.plot ?: return
+        val expr = shownResult()?.plot ?: return
         openGraph(expr)
     }
 
@@ -752,7 +769,7 @@ class MainActivity : Activity(), InkView.Listener {
         for (sys in page.systems) {
             val id = "S:" + sys.lines.joinToString("|") { it.key }
             val h = sys.lines.map { it.charHeight }.sorted()[sys.lines.size / 2]
-            newItems[id] = Item(id, null, sys.bounds, h)
+            newItems[id] = Item(id, null, sys.bounds, h, sys.lines.sortedBy { it.bounds.top }.map { it.key })
             val lines = JSONArray()
             for (line in sys.lines.sortedBy { it.bounds.top }) lines.put(lineJson(line))
             json.put(JSONObject().put("id", id).put("type", "system").put("lines", lines))
@@ -842,8 +859,7 @@ class MainActivity : Activity(), InkView.Listener {
 
     private fun updatePanel() {
         if (engine == null) return
-        val kb = keyboardResult
-        val r = if (keyboardRow.visibility == View.VISIBLE && kb != null) kb else focusedId?.let { results[it] }
+        val r = shownResult()
         if (r == null) {
             setStatus(if (ink.hasInk()) "" else getString(R.string.ready), null)
             return

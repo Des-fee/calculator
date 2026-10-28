@@ -70,6 +70,12 @@ class Engine(context: Context) {
         return evaluate(items).getValue("kb")
     }
 
+    /** Typeset preview of typed text, or null when it does not parse (yet). */
+    fun texOf(text: String): String? = module.callAttr("display_tex", text)?.toString()?.takeIf { it != "None" }
+
+    /** The engine's linear text in the keyboard form shown for corrections (x^2, int(f, x, 0, 1)). */
+    fun editableText(text: String): String = module.callAttr("editable_text", text).toString()
+
     /** LaTeX label of a corrected line for fine-tuning, or null. */
     fun trainingLabel(text: String): String? =
         module.callAttr("training_label", text)?.toString()?.takeIf { it != "None" }

@@ -228,6 +228,17 @@ def test_mod_and_ode():
     assert run("\\frac { d y } { d x } = y")["answer"] == "y = C₁eˣ"
 
 
+def test_keyboard_forms():
+    assert ce.editable_text("integrate(x^(2), (x, 0, 1)) =") == "int(x^2, x, 0, 1) ="
+    assert ce.editable_text("((1)/(2)) + ((1)/(3)) =") == "(1/2) + (1/3) ="
+    assert ce.process("int(x^2, x, 0, 1) =")["answer"] == "1/3 ≈ 0.33333333"
+    assert ce.process("lim(sin(x)/x, x, 0) =")["answer"] == "1"
+    assert ce.process("sum(1/n^2, n, 1, oo) =")["answer"] == "π²/6 ≈ 1.6449341"
+    assert ce.process("(x^3)' =")["answer"] == "3x²"
+    assert ce.process("y' = 2x")["answer"] == "y = C₁ + x²"
+    assert ce.display_tex("x+y=3; x-y=1") == "\\begin{cases}x + y = 3\\\\x - y = 1\\end{cases}"
+
+
 def test_plot():
     data = json.loads(ce.plot_points("y = 1/x", -1.0, 1.0, 5))
     assert data["ys"][2] is None and data["ys"][0] == -1.0, data

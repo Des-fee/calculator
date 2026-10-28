@@ -504,6 +504,31 @@ def tokens_to_text(tokens):
 SUPERSCRIPTS = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁻", "0123456789-")
 
 
+# keyboard forms: int(f, x), int(f, x, a, b); lim(f, x, a); sum(f, n, a, b) — besides SymPy's tuple forms
+
+def _kb_int(fn):
+    def f(expr, x=None, a=None, b=None, **kw):
+        if x is None:
+            fs = sorted(sp.sympify(expr).free_symbols, key=str)
+            x = sp.Symbol("x") if sp.Symbol("x") in fs or not fs else fs[0]
+        return fn(expr, (x, a, b), **kw) if a is not None and b is not None else fn(expr, x, **kw)
+    return f
+
+
+def _kb_lim(fn):
+    def f(expr, x=None, a=None, *rest, **kw):
+        if a is None:
+            a, x = x, sp.Symbol("x")
+        return fn(expr, x, a, *rest, **kw)
+    return f
+
+
+def _kb_sum(fn):
+    def f(expr, n, a=None, b=None, **kw):
+        return fn(expr, (n, a, b), **kw) if a is not None else fn(expr, n, **kw)
+    return f
+
+
 def _local_dict():
     d = {}
     for ch in "abcdfghjklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ":
@@ -518,8 +543,9 @@ def _local_dict():
     d["arccos"] = sp.acos
     d["arctg"] = sp.atan
     d["arctan"] = sp.atan
-    d["int"] = sp.integrate
-    d["lim"] = sp.limit
+    d["int"] = _kb_int(sp.integrate)
+    d["lim"] = _kb_lim(sp.limit)
+    d["sum"] = _kb_sum(sp.summation)
     d["det"] = lambda m: sp.Matrix(m).det()
     d["inv"] = lambda m: sp.Matrix(m).inv()
     d["T"] = sp.Symbol("T")
@@ -531,6 +557,11 @@ LOCALS = _local_dict()
 
 def normalize_text(text):
     s = text.strip()
+    # primes typed on the keyboard: y'' and (x^3)' are derivatives in x
+    s = s.replace("′", "'").replace("″", "''")
+    s = re.sub(r"\b([A-Za-z])''", r"diff(\1, x, 2)", s)
+    s = re.sub(r"\b([A-Za-z])'", r"diff(\1, x)", s)
+    s = _paren_primes(s)
     s = s.replace("−", "-").replace("–", "-").replace("×", "*").replace("·", "*")
     s = s.replace("÷", "/").replace(":", "/").replace("≤", "<=").replace("≥", ">=").replace("≠", "!=")
     s = s.replace("π", "pi").replace("∞", "oo").replace("∫", "int")
@@ -605,6 +636,65 @@ def _magnitude(e):
     if v != 0 and mpmath.log10(abs(v)) > MAX_LOG10:
         raise TooBig(mpmath.log10(abs(v)))
     return v
+
+
+def _paren_primes(s):
+    """(x^3)' -> diff((x^3), x); (…)'' -> second derivative."""
+    while True:
+        m = re.search(r"\)('+)", s)
+        if not m:
+            return s
+        end = m.start()
+        depth = 0
+        for k in range(end, -1, -1):
+            depth += s[k] == ")"
+            depth -= s[k] == "("
+            if depth == 0:
+                break
+        inner = s[k:end + 1]
+        n = len(m.group(1))
+        s = s[:k] + "diff(%s, x%s)" % (inner, ", %d" % n if n > 1 else "") + s[m.end():]
+
+
+def editable_text(text):
+    """The engine's linear text in the friendlier keyboard form: x^2, 1/2, int(f, x, 0, 1), lim(f, x, 0)."""
+    t = text
+
+    def calls(t, name, rewrite):
+        out, i = "", 0
+        while True:
+            j = t.find(name + "(", i)
+            if j < 0 or (j > 0 and (t[j - 1].isalnum() or t[j - 1] == "_")):
+                if j < 0:
+                    return out + t[i:]
+                out += t[i:j + 1]
+                i = j + 1
+                continue
+            depth, k = 0, j + len(name)
+            for k in range(j + len(name), len(t)):
+                depth += t[k] == "("
+                depth -= t[k] == ")"
+                if depth == 0:
+                    break
+            args = [a.strip() for a in split_top(t[j + len(name) + 1:k], ",")]
+            out += t[i:j] + rewrite(args)
+            i = k + 1
+
+    def tuple_args(args):
+        if len(args) == 2 and args[1].startswith("(") and args[1].endswith(")"):
+            return [args[0]] + [a.strip() for a in split_top(args[1][1:-1], ",")]
+        return args
+
+    t = calls(t, "integrate", lambda a: "int(%s)" % ", ".join(tuple_args(a)))
+    t = calls(t, "summation", lambda a: "sum(%s)" % ", ".join(tuple_args(a)))
+    t = calls(t, "limit", lambda a: "lim(%s)" % ", ".join(a))
+    for _ in range(4):  # (2) -> 2, ((1)/(2)) -> (1/2), x^(2) -> x^2
+        t = re.sub(r"(?<![\w)])\(\s*([A-Za-z0-9.]+)\s*\)", r"\1", t)
+    t = re.sub(r"\(\s*\(([^()]*)\)\s*\)", r"(\1)", t)
+    t = re.sub(r"(?<=\w)\s*\*\s*(?=\w)", "·", t)
+    t = re.sub(r"\bAbs\(\s*([^()]*?)\s*\)", r"|\1|", t)
+    t = re.sub(r"\s+", " ", t).replace("( ", "(").replace(" )", ")")
+    return t.strip()
 
 
 def parse(text):
@@ -1028,9 +1118,9 @@ def _display_root(a, n, **_):
 def _display_locals():
     d = dict(LOCALS)
     d.update({
-        "integrate": sp.Integral, "int": sp.Integral,
-        "limit": _display_limit, "lim": _display_limit,
-        "diff": sp.Derivative, "summation": sp.Sum,
+        "integrate": sp.Integral, "int": _kb_int(sp.Integral),
+        "limit": _display_limit, "lim": _kb_lim(_display_limit),
+        "diff": sp.Derivative, "summation": sp.Sum, "sum": _kb_sum(sp.Sum),
         "log": _display_log, "ln": _display_log, "lg": lambda x, **_: _LogBase(x, 10),
         "root": _display_root,
         "factorial": lambda n, **_: sp.factorial(n, evaluate=False),
@@ -1062,6 +1152,14 @@ def text_to_tex(text):
         return "".join(out).strip() or None
     except Exception:  # noqa: BLE001 - display only
         return None
+
+
+def display_tex(text):
+    """Typeset preview of typed text (several statements separated by ";" are a system)."""
+    parts = statements(text)
+    if len(parts) > 1:
+        return system_tex(parts)
+    return text_to_tex(parts[0]) if parts else None
 
 
 def training_label(text):

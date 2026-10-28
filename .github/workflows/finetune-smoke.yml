@@ -48,7 +48,7 @@ jobs:
           rng = random.Random(1)
           with open("smoke-samples/calculator_samples.jsonl", "w") as f:
               for k in range(30):
-                  a, b = rng.randint(1, 9), rng.randint(1, 9)
+                  a, b = rng.choice([1, 2, 3, 4, 5, 7]), rng.choice([1, 2, 3, 4, 5, 7])
                   strokes, _ = write("%d+%d" % (a, b), 20, 100)
                   ink = [[v for p in s for v in p] for s in strokes]
                   f.write(json.dumps({"ink": ink, "text": "%d+%d=" % (a, b), "latex": "%d + %d" % (a, b)}) + "\n")
