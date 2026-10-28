@@ -2361,7 +2361,25 @@ def process_units(text):
         unit = {"C": "°C", "F": "°F", "K": "K"}[b]
         return answer("value", [value_line(out, False) + [(" " + unit, r"\ \text{%s}" % unit)]])
     m = CONVERT_RE.match(text)
-    if not m or re.search(r"\b(binary|hex|octal|двоичн|шестнадцат|восьмерич)", m.group(2)):
+    if not m:
+        # 5 км + 300 м =   (the answer in the first unit written)
+        expr_text = text.rstrip().rstrip("=").strip()
+        names = re.findall(r"[A-Za-zА-Яа-яμΩ]+", expr_text)
+        if not text.rstrip().endswith("=") or not names or not re.search(r"\d", expr_text) or not (
+                any(re.search(r"[А-Яа-я]", n) for n in names) or any(len(n) > 1 for n in names)):
+            return None
+        if _unit_expr(expr_text) is None:
+            return None
+        cyr = any(re.search(r"[А-Яа-я]", n) for n in names)
+        firsts = [names[0]] + (["Н", "Дж", "Вт", "Па", "м/с", "м/с^2", "кг", "м", "с", "м^2", "м^3"] if cyr
+                               else ["N", "J", "W", "Pa", "m/s", "m/s^2", "kg", "m", "s", "m^2", "m^3", "C", "V", "Ohm"])
+        for target in firsts:
+            try:
+                return process_units(expr_text + " in " + target)
+            except CalcError:
+                continue
+        raise CalcError("единицы не складываются в известную величину")
+    if re.search(r"\b(binary|hex|octal|двоичн|шестнадцат|восьмерич)", m.group(2)):
         return None
     target = _unit_expr(m.group(2))
     src = _unit_expr(m.group(1))
@@ -2390,7 +2408,7 @@ def process(text, forced=False):
     `forced` means the user explicitly asked for a result (keyboard '=' key).
     """
     text = text.strip()
-    if re.search(r"\s(in|to|в|->|→)\s", text):
+    if re.search(r"\s(in|to|в|->|→)\s", text) or re.search(r"\d\s*[A-Za-zА-Яа-я]{2,}|[А-Яа-я]", text):
         res = process_units(text)
         if res is not None:
             return res

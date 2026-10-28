@@ -292,6 +292,9 @@ def test_units():
     assert ans("1 atm in mmHg") == "760 mmHg"
     assert ans("5 kg in m").startswith("единицы несовместимы")
     assert ans("100 in binary =") == "1100100₂"
+    assert ans("5 км + 300 м =") == "5.3 км"
+    assert ans("100 km/h * 2 h =") == "200 km"
+    assert ans("3 kg * 9.8 m/s^2 =") == "29.4 N"
 
 
 def test_graphs():
