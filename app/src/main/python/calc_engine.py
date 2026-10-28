@@ -801,7 +801,8 @@ def fmt(e):
     if isinstance(e, sp.Derivative):
         return "(%s)'" % fmt(e.expr)
     s = sp.sstr(e)
-    return s.replace("**", "^").replace("*", "·").replace("pi", "π").replace("sqrt", "√").replace("oo", "∞")
+    s = s.replace("**", "^").replace("*", "·").replace("sqrt", "√")
+    return re.sub(r"\boo\b", "∞", re.sub(r"\bpi\b", "π", s))
 
 
 def _ordered(args):
@@ -1027,6 +1028,8 @@ def value_line(expr, decimal_only=False):
             return [X(expr)]
         if isinstance(expr, sp.Float):
             return [NUM(expr)]
+        if expr.has(sp.CRootOf) and is_real:  # a root with no formula: only its value
+            return [("≈ ", r"\approx "), NUM(approx, 8)]
         exact = fmt(expr)
         if is_real:
             dec = NUM(approx, 8)
@@ -1073,6 +1076,16 @@ def simplify_value(expr):
     return r
 
 
+MAX_ROOTS = 6
+
+
+def assign(name, value):
+    """'x = value', or 'x ≈ value' when the value is only approximate."""
+    if value and value[0][0] == "≈ ":
+        return [name, O("≈")] + value[1:]
+    return [name, O("=")] + value
+
+
 def solve_equation(eq, decimal):
     """Answer lines, one per root."""
     symbols = order_vars(eq.free_symbols)
@@ -1084,16 +1097,23 @@ def solve_equation(eq, decimal):
         if diff == 0:
             return [ANY(var)]
         return [[W("нет решений")]]
-    real = [s for s in sols if s.is_real is not False]
+    # real roots first: with letters in the equation SymPy cannot tell, so roots written with i are dropped
+    real = [s for s in sols if s.is_real is not False and not s.has(sp.I)]
     if real:
         sols = real
     sols = _sort_solutions(sols)
     if len(sols) == 1:
-        return [[X(var), O("=")] + value_line(sols[0], decimal)]
+        return [assign(X(var), value_line(sols[0], decimal))]
+    if len(sols) == 2 and sp.simplify(sols[0] + sols[1]) == 0:
+        pos = sols[1] if not sols[1].could_extract_minus_sign() else sols[0]
+        return [[X(var), O("="), ("±", r"\pm ")] + value_line(pos, decimal)]
     lines = []
-    for k, s in enumerate(sols, 1):
+    shown = sols[:MAX_ROOTS]
+    for k, s in enumerate(shown, 1):
         name = (fmt(var) + str(k).translate(SUB), "{%s}_{%d}" % (to_tex(var), k))
-        lines.append([name, O("=")] + value_line(s, decimal))
+        lines.append(assign(name, value_line(s, decimal)))
+    if len(sols) > len(shown):
+        lines.append([W("… ещё %d" % (len(sols) - len(shown)))])
     return lines
 
 
@@ -1180,7 +1200,7 @@ def solve_system(eqs, decimal):
             if v in s:
                 if line:
                     line.append((", ", r",\quad "))
-                line += [X(v), O("=")] + value_line(s[v], decimal)
+                line += assign(X(v), value_line(s[v], decimal))
         lines.append(line or [W("любые значения")])
     return lines
 

@@ -36,8 +36,11 @@ PROCESS = [
     ("limit(((sin(x))/(x)), x, 0) =", "1"),
     ("diff(x^(3), x) =", "3x²"),
     ("2x + 3 = 7", "x = 2"),
-    ("x^2 - 4 = 0", "x₁ = −2; x₂ = 2"),
-    ("x^2 + 1 = 0", "x₁ = −i; x₂ = i"),
+    ("x^2 - 4 = 0", "x = ±2"),
+    ("x^2 + 1 = 0", "x = ±i"),
+    ("x^3 - 6x^2 + 11x - 6 = 0", "x₁ = 1; x₂ = 2; x₃ = 3"),
+    ("x^5 - x - 1 = 0", "x ≈ 1.167304"),
+    ("x^16 + y^z = 0", "x = ±¹⁶√(−y^z)"),
     ("2 + 2 = 4", "✓"),
     ("2 + 2 = 5", "✗  (= 4)"),
     ("12.5 * 2 =", "25"),
@@ -118,7 +121,7 @@ def test_tex():
     out = {o["id"]: o for o in json.loads(ce.evaluate_document(json.dumps(items)))}
     assert out["a"]["input_tex"] == "\\frac{1}{2} + \\frac{1}{3} =", out["a"]
     assert out["a"]["tex"] == ["\\frac{5}{6} \\approx 0.83333333"], out["a"]
-    assert out["b"]["tex"] == ["{x}_{1} = - \\sqrt{2} \\approx -1.4142136", "{x}_{2} = \\sqrt{2} \\approx 1.4142136"], out["b"]
+    assert out["b"]["tex"] == ["x = \\pm \\sqrt{2} \\approx 1.4142136"], out["b"]
     assert out["c"]["input_tex"] == "\\begin{cases}x + y = 3\\\\x - y = 1\\end{cases}", out["c"]
     assert out["c"]["tex"] == ["x = 2,\\quad y = 1"], out["c"]
     assert out["d"]["input_tex"] == "\\sqrt[3]{27} =", out["d"]

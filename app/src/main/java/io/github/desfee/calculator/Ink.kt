@@ -108,20 +108,25 @@ object Segmenter {
                     c.bounds.right <= band.minOf { it.bounds.left } + 1.0f * h
             }
             var covered = bandLists.indices.filter { inside(it) }
-            if (covered.size == 1) {
-                // lines written close together end up in one band: split it by stroke centres
-                val i = covered[0]
-                val band = bandLists[i]
-                if (band.maxOf { it.bounds.bottom } - band.minOf { it.bounds.top } > 1.8f * h) {
-                    val parts = mergeFractions(splitByCentres(band, h), h)
-                    if (parts.size >= 2) {
-                        bandLists.removeAt(i)
-                        bandLists.addAll(i, parts.map { it.toMutableList() })
-                        // indices after i shift; usedInSystem only holds bands above earlier braces
-                        val shifted = usedInSystem.map { if (it > i) it + parts.size - 1 else it }
-                        usedInSystem.clear(); usedInSystem.addAll(shifted)
-                        covered = bandLists.indices.filter { inside(it) }
-                    }
+            // lines written close together (a descender touching the next line's exponent) end up in one
+            // band: split every band under the brace that is too tall for one line, then give exponents
+            // and limits back to their lines
+            var split = true
+            while (split) {
+                split = false
+                for (i in covered) {
+                    val band = bandLists[i]
+                    if (band.maxOf { it.bounds.bottom } - band.minOf { it.bounds.top } <= 1.8f * h) continue
+                    val parts = attachSmallGroups(mergeFractions(splitByCentres(band, h), h), h)
+                    if (parts.size < 2) continue
+                    bandLists.removeAt(i)
+                    bandLists.addAll(i, parts.map { it.toMutableList() })
+                    // indices after i shift; usedInSystem only holds bands of earlier braces
+                    val shifted = usedInSystem.map { if (it > i) it + parts.size - 1 else it }
+                    usedInSystem.clear(); usedInSystem.addAll(shifted)
+                    covered = bandLists.indices.filter { inside(it) }
+                    split = true
+                    break
                 }
             }
             if (covered.size >= 2) {
