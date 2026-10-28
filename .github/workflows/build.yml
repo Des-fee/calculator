@@ -26,7 +26,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           id=""
-          if gh api repos/${{ github.repository }}/releases/tags/model-weights > /tmp/rel.json 2>/dev/null; then
+          # weights committed to the repository take precedence over the release asset
+          if [ -f model/weights/comer_mathwriting.ckpt ]; then
+            id="repo-$(sha256sum model/weights/comer_mathwriting.ckpt | cut -c1-16)"
+          elif gh api repos/${{ github.repository }}/releases/tags/model-weights > /tmp/rel.json 2>/dev/null; then
             id=$(jq -r '.assets[] | select(.name == "comer_mathwriting.ckpt") | .id' /tmp/rel.json)
           fi
           echo "id=${id:-none}" >> "$GITHUB_OUTPUT"
@@ -53,7 +56,10 @@ jobs:
           pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
           pip install onnx==1.17.0 onnxruntime==1.20.1 pytorch-lightning==2.4.0 einops pillow opencv-python-headless 2>&1 | tail -n 5
           mkdir -p model-out
-          if [ "${{ steps.weights.outputs.id }}" != "none" ]; then
+          if [ -f model/weights/comer_mathwriting.ckpt ]; then
+            export COMER_CKPT=$PWD/model/weights/comer_mathwriting.ckpt
+            echo "using fine-tuned weights from the repository" | tee model-out/export.log
+          elif [ "${{ steps.weights.outputs.id }}" != "none" ]; then
             gh release download model-weights -R ${{ github.repository }} -p comer_mathwriting.ckpt -D /tmp/weights
             export COMER_CKPT=/tmp/weights/comer_mathwriting.ckpt
             echo "using fine-tuned weights" | tee model-out/export.log
