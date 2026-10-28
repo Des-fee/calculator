@@ -858,8 +858,9 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
         openGraph(expr)
     }
 
-    private fun openGraph(expr: String) {
-        val eng = engine ?: return
+    private fun isSurface(spec: String) = spec.startsWith("{") && JSONObject(spec).optString("t") == "surface"
+
+    private fun graphDialog(title: String, content: View, hint: String, extra: View? = null): Dialog {
         val night = colors === Palette.dark
         val dialog = Dialog(this, if (night) android.R.style.Theme_Material_NoActionBar else android.R.style.Theme_Material_Light_NoActionBar)
         val box = LinearLayout(this).apply {
@@ -872,32 +873,70 @@ class MainActivity : Activity(), InkView.Listener, MathEditor.Listener {
             setPadding(dpi(12f), dpi(4f), dpi(4f), dpi(4f))
         }
         top.addView(TextView(this).apply {
-            text = getString(R.string.graph)
+            text = title
             textSize = 18f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(colors.text)
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        extra?.let { top.addView(it) }
         top.addView(toolButton("✕", getString(R.string.close)) { dialog.dismiss() })
         box.addView(top)
-        val graph = GraphView(this, colors) { xmin, xmax, n, done ->
-            worker.execute {
-                val (p, err) = try {
-                    eng.plot(expr, xmin, xmax, n) to null
-                } catch (e: Exception) {
-                    null to (e.message ?: "ошибка")
-                }
-                ui.post { done(p, err) }
-            }
-        }
-        box.addView(graph, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        box.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         box.addView(TextView(this).apply {
-            text = getString(R.string.graph_hint)
+            text = hint
             textSize = 12f
             setTextColor(colors.muted)
             setPadding(dpi(16f), dpi(6f), dpi(16f), dpi(10f))
         })
         dialog.setContentView(box)
-        dialog.show()
+        return dialog
+    }
+
+    private fun openGraph(spec: String) {
+        val eng = engine ?: return
+        if (isSurface(spec)) {
+            val view = SurfaceView3D(this, colors) { r, n, done ->
+                worker.execute {
+                    val (s, err) = try {
+                        eng.surface(spec, 0.0, 0.0, r, n) to null
+                    } catch (e: Exception) {
+                        null to (e.message ?: "ошибка")
+                    }
+                    ui.post { done(s, err) }
+                }
+            }
+            graphDialog(getString(R.string.graph_3d), view, getString(R.string.graph_3d_hint)).show()
+            return
+        }
+        // the other 2D graphs of the sheet can be drawn together with this one
+        val others = results.values.mapNotNull { it.plot }.filter { it != spec && !isSurface(it) }.distinct()
+        var specs = listOf(spec)
+        lateinit var graph: GraphView
+        graph = GraphView(this, colors, { w, h, done ->
+            worker.execute {
+                val v = try { eng.initialView(specs, w, h) } catch (e: Exception) { null }
+                ui.post { done(v) }
+            }
+        }) { xmin, xmax, ymin, ymax, w, h, done ->
+            val now = specs
+            worker.execute {
+                val (s, err) = try {
+                    eng.scene(now, xmin, xmax, ymin, ymax, w, h) to null
+                } catch (e: Exception) {
+                    null to (e.message ?: "ошибка")
+                }
+                ui.post { done(s, err) }
+            }
+        }
+        val all = if (others.isEmpty()) null else chip(getString(R.string.graph_all, others.size + 1)) {}.also { c ->
+            c.setOnClickListener {
+                val on = specs.size == 1
+                specs = if (on) listOf(spec) + others else listOf(spec)
+                c.text = getString(if (on) R.string.graph_one else R.string.graph_all, others.size + 1)
+                graph.reload()
+            }
+        }
+        graphDialog(getString(R.string.graph), graph, getString(R.string.graph_hint), all).show()
     }
 
     // ------------------------------------------------------------------ ink events

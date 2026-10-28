@@ -82,6 +82,68 @@ class Engine(context: Context) {
     fun trainingLabel(text: String): String? =
         module.callAttr("training_label", text)?.toString()?.takeIf { it != "None" }
 
+    private val plots: PyObject by lazy { Python.getInstance().getModule("calc_plot") }
+
+    class Layer(
+        val type: String,
+        val label: String,
+        val paths: List<DoubleArray>,
+        val thin: Boolean,
+        val nx: Int = 0,
+        val ny: Int = 0,
+        val mask: String? = null,
+        val solution: DoubleArray? = null,
+        val ic: DoubleArray? = null,
+    )
+
+    class Point(val x: Double, val y: Double, val label: String, val kind: String)
+
+    class Scene(val layers: List<Layer>, val points: List<Point>)
+
+    private fun JSONArray.doubles() = DoubleArray(length()) { optDouble(it) }
+
+    /** Everything [specs] draw in the given window (page units), sampled for a [w]×[h] px view. */
+    fun scene(specs: List<String>, xmin: Double, xmax: Double, ymin: Double, ymax: Double, w: Int, h: Int): Scene {
+        val o = JSONObject(plots.callAttr("scene", JSONArray(specs).toString(), xmin, xmax, ymin, ymax, w, h).toString())
+        if (o.has("error")) throw IllegalArgumentException(o.getString("error"))
+        val layers = o.getJSONArray("layers").let { a ->
+            List(a.length()) { i ->
+                val l = a.getJSONObject(i)
+                val paths = l.optJSONArray("paths")?.let { p -> List(p.length()) { p.getJSONArray(it).doubles() } } ?: emptyList()
+                Layer(
+                    l.optString("type"), l.optString("label"), paths, l.optBoolean("thin", false),
+                    l.optInt("nx"), l.optInt("ny"), l.optStringOrNull("mask"),
+                    l.optJSONArray("solution")?.doubles(), l.optJSONArray("ic")?.doubles(),
+                )
+            }
+        }
+        val points = o.getJSONArray("points").let { a ->
+            List(a.length()) { i ->
+                val p = a.getJSONObject(i)
+                Point(p.getDouble("x"), p.getDouble("y"), p.optString("label"), p.optString("kind"))
+            }
+        }
+        return Scene(layers, points)
+    }
+
+    /** A good first window [xmin, xmax, ymin, ymax] for these graphs in a [w]×[h] view. */
+    fun initialView(specs: List<String>, w: Int, h: Int): DoubleArray =
+        JSONArray(plots.callAttr("initial_view", JSONArray(specs).toString(), w, h).toString()).doubles()
+
+    class Surface(val z: Array<DoubleArray>, val zmin: Double, val zmax: Double, val label: String)
+
+    /** z = f(x, y) on the square [cx ± r] × [cy ± r], (n + 1)² points; NaN where undefined. */
+    fun surface(spec: String, cx: Double, cy: Double, r: Double, n: Int): Surface {
+        val o = JSONObject(plots.callAttr("surface", spec, cx, cy, r, n).toString())
+        if (o.has("error")) throw IllegalArgumentException(o.getString("error"))
+        val rows = o.getJSONArray("z")
+        val z = Array(rows.length()) { j ->
+            val row = rows.getJSONArray(j)
+            DoubleArray(row.length()) { if (row.isNull(it)) Double.NaN else row.getDouble(it) }
+        }
+        return Surface(z, o.getDouble("zmin"), o.getDouble("zmax"), o.optString("label"))
+    }
+
     class Plot(val xs: DoubleArray, val ys: Array<Double?>, val label: String)
 
     fun plot(expr: String, xmin: Double, xmax: Double, n: Int): Plot {

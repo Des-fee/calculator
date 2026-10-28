@@ -294,6 +294,29 @@ def test_units():
     assert ans("100 in binary =") == "1100100₂"
 
 
+def test_graphs():
+    import calc_plot as cp
+
+    def spec(t):
+        r = json.loads(ce.evaluate_document(json.dumps([{"id": "a", "type": "text", "text": t, "forced": True}])))[0]
+        return r["kind"], json.loads(r["plot"])["t"] if r.get("plot") else None
+
+    assert spec("y = x^2 - 1") == ("function", "y")
+    assert spec("x = cos(t); y = sin(t)") == ("function", "param")
+    assert spec("r = 1 + cos(φ)") == ("function", "polar")
+    assert spec("x^2 + y^2 = 1") == ("solve", "implicit")
+    assert spec("y > x^2; x + y < 3") == ("function", "region")
+    assert spec("z = x^2 - y^2") == ("function", "surface")
+    assert spec("y' = x - y; y(0) = 1") == ("system", "ode")
+    assert spec("2x + 1 = 5") == ("solve", None)
+    specs = json.dumps([json.dumps({"t": "y", "e": "x**2 - 1"}), json.dumps({"t": "y", "e": "x + 1"})])
+    sc = json.loads(cp.scene(specs, -5, 5, -5, 5, 800, 600))
+    labels = {p["label"] for p in sc["points"]}
+    assert {"(−1; 0)", "(1; 0)", "(0; −1)", "(2; 3)"} <= labels, labels
+    su = json.loads(cp.surface(json.dumps({"t": "surface", "e": "x*y"}), 0, 0, 2, 10))
+    assert len(su["z"]) == 11 and su["z"][0][0] == 4.0
+
+
 def test_plot():
     data = json.loads(ce.plot_points("y = 1/x", -1.0, 1.0, 5))
     assert data["ys"][2] is None and data["ys"][0] == -1.0, data

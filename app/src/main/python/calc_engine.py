@@ -1158,6 +1158,8 @@ def _wrap(e):
 
 
 def _power(base_text, exp):
+    if exp == 1:
+        return base_text
     if exp.is_Integer or (isinstance(exp, sp.Symbol) and len(exp.name) == 1 and exp.name in "nixyk"):
         return base_text + str(exp).translate(SUP)
     e_text = fmt(exp)
@@ -2385,6 +2387,106 @@ def process_ivp(texts):
     return [[X(sp.Symbol("y")), O("="), X(s.rhs)] for s in sols[:MAX_ROOTS]]
 
 
+# ---------------------------------------------------------------- what a line draws (graphs)
+
+PARAM_NAMES = ("t", "φ", "θ", "phi", "theta")
+
+
+def _rel_parts(t):
+    pieces, ops = split_relation(t)
+    if len(ops) != 1 or not pieces[0].strip() or not pieces[1].strip():
+        return None
+    return pieces[0].strip(), ops[0], pieces[1].strip()
+
+
+def _expr_text(e):
+    return sp.sstr(e)
+
+
+def plot_spec(texts):
+    """JSON text describing what the statements draw, or None.
+
+    {"t": "y", "e": f(x)} | {"t": "param", "x": .., "y": .., "v": "t"} | {"t": "polar", "r": .., "v": "φ"}
+    | {"t": "implicit", "e": F(x, y)} | {"t": "region", "c": ["y > x^2", ...]} | {"t": "surface", "e": f(x, y)}
+    | {"t": "ode", "e": f(x, y), "ic": [x0, y0]}
+    """
+    spec = _plot_spec(texts)
+    if spec is None:
+        return None
+    d = json.loads(spec)
+    d["l"] = "; ".join(re.sub(r"\s+", " ", t.strip()) for t in texts)
+    return json.dumps(d, ensure_ascii=False)
+
+
+def _plot_spec(texts):
+    x, y = sp.Symbol("x"), sp.Symbol("y")
+    parts = [_rel_parts(t) for t in texts]
+    if not parts or any(p is None for p in parts):
+        return None
+    # a differential equation y' = f(x, y) (with y(x0) = y0): direction field
+    odes = [t for t in texts if not IC_RE.match(t) and re.search(r"\by\b", t) and re.search(r"'|′|diff\(", t)]
+    if len(odes) == 1:
+        lhs, op, rhs = _rel_parts(odes[0])
+        if op == "=" and re.fullmatch(r"y\s*('|′)", lhs):
+            try:
+                f = parse(rhs)
+            except CalcError:
+                return None
+            if f.free_symbols <= {x, y}:
+                spec = {"t": "ode", "e": _expr_text(f)}
+                ics = [IC_RE.match(t) for t in texts if IC_RE.match(t)]
+                if len(ics) == 1 and not ics[0].group(1):
+                    try:
+                        spec["ic"] = [float(parse(ics[0].group(2))), float(parse(ics[0].group(3)))]
+                    except (CalcError, TypeError):
+                        pass
+                return json.dumps(spec)
+        return None
+    try:
+        sides = [(parse(a), op, parse(b)) for a, op, b in parts]
+    except CalcError:
+        return None
+    if any(isinstance(a, sp.MatrixBase) or isinstance(b, sp.MatrixBase) for a, _, b in sides):
+        return None
+    syms = set()
+    for a, _, b in sides:
+        syms |= a.free_symbols | b.free_symbols
+    names = {str(v) for v in syms}
+    if len(sides) == 2 and all(op == "=" for _, op, _ in sides):
+        lhs = {str(a): b for a, _, b in sides if isinstance(a, sp.Symbol)}
+        if set(lhs) == {"x", "y"}:
+            free = lhs["x"].free_symbols | lhs["y"].free_symbols
+            if len(free) == 1 and str(next(iter(free))) in PARAM_NAMES:
+                v = str(next(iter(free)))
+                return json.dumps({"t": "param", "x": _expr_text(lhs["x"]), "y": _expr_text(lhs["y"]), "v": v})
+    if len(sides) == 1:
+        a, op, b = sides[0]
+        if op == "=" and isinstance(a, sp.Symbol):
+            if a.name == "r" and len(b.free_symbols) == 1 and str(next(iter(b.free_symbols))) in PARAM_NAMES:
+                return json.dumps({"t": "polar", "r": _expr_text(b), "v": str(next(iter(b.free_symbols)))})
+            if a.name == "z" and b.free_symbols <= {x, y} and b.free_symbols:
+                return json.dumps({"t": "surface", "e": _expr_text(b)})
+            if a.name in ("y", "f") and b.free_symbols <= {x}:
+                return json.dumps({"t": "y", "e": _expr_text(b)})
+        if op == "=" and names == {"x", "y"}:
+            return json.dumps({"t": "implicit", "e": _expr_text(a - b)})
+    if names <= {"x", "y"} and "y" in names and all(op in ("<", ">", "<=", ">=") for _, op, _ in sides):
+        return json.dumps({"t": "region", "c": [_expr_text(a - b) + (" > 0" if op in (">", ">=") else " < 0")
+                                                for a, op, b in sides]})
+    return None
+
+
+def drawn_answer(texts):
+    """Statements that are only drawn (a parametric curve, a polar curve, a surface, a region); else None."""
+    spec = plot_spec(texts)
+    if spec is None:
+        return None
+    t = json.loads(spec)["t"]
+    if t in ("param", "polar", "surface", "region"):
+        return answer("function", plot=spec)
+    return None
+
+
 def process_system(texts):
     """Answer lines of a system written one equation per line."""
     ivp = process_ivp(texts)
@@ -2590,6 +2692,8 @@ def evaluate_item(item):
             text, res = evaluate_line(_line_candidates({"tokens": item["tokens"], "alts": item.get("alts")}),
                                       forced=item.get("forced", False))
             out["input"] = text
+            if text.strip():
+                res = _drawn_or([text], lambda: res)
             out["input_tex"] = text_to_tex(text) if "error" not in res else None
             add_preview(text, res)
             return res
@@ -2601,7 +2705,7 @@ def evaluate_item(item):
             out["input_tex"] = system_tex(complete)
             if len(complete) < 2:
                 return answer("none")
-            return answer("system", process_system(complete), sep="\n")
+            return _drawn_or(complete, lambda: answer("system", process_system(complete), sep="\n"))
     else:
         def run():
             text = item["text"]
@@ -2609,12 +2713,39 @@ def evaluate_item(item):
             parts = statements(text)
             if len(parts) > 1:
                 out["input_tex"] = system_tex(parts)
-                return answer("system", process_system(parts), sep="\n")
+                return _drawn_or(parts, lambda: answer("system", process_system(parts), sep="\n"))
             out["input_tex"] = text_to_tex(parts[0]) if parts else None
-            return process(parts[0] if parts else "", forced=item.get("forced", True))
+            if not parts:
+                return answer("none")
+            return _drawn_or(parts, lambda: process(parts[0], forced=item.get("forced", True)))
     res = _safe(run)
     out.update(res)
     return out
+
+
+def _drawn_or(texts, compute):
+    """A line that is only drawn gets its graph; any other line its answer plus, when it has one, its graph."""
+    try:
+        drawn = drawn_answer(texts)
+    except Exception:  # noqa: BLE001 - a graph is a bonus
+        drawn = None
+    if drawn is not None:
+        return drawn
+    res = compute()
+    try:
+        spec = plot_spec(texts)
+    except Exception:  # noqa: BLE001
+        spec = None
+    if spec is not None and isinstance(res, dict) and "error" not in res:
+        res = dict(res, plot=spec)
+    elif isinstance(res, dict) and res.get("plot") and not str(res["plot"]).startswith("{"):
+        # "x^2 - 1 =" plots its value: store the expression itself (names defined above are substituted)
+        try:
+            e = parse(res["plot"])
+            res = dict(res, plot=json.dumps({"t": "y", "e": _expr_text(e)}) if e.free_symbols <= {sp.Symbol("x")} else None)
+        except CalcError:
+            pass
+    return res
 
 
 def add_preview(text, res):
@@ -2758,7 +2889,12 @@ def _define_result(res, name, value):
         except Exception:  # noqa: BLE001
             pass
         if value.variables == (sp.Symbol("x"),) and not value.expr.free_symbols - {sp.Symbol("x")}:
-            out["plot"] = sp.sstr(value.expr)
+            out["plot"] = json.dumps({"t": "y", "e": sp.sstr(value.expr)})
+            out["kind"] = "function"
+        elif len(value.variables) == 2 and not value.expr.free_symbols - set(value.variables):
+            a, b = value.variables
+            e = value.expr.subs({a: sp.Symbol("x"), b: sp.Symbol("y")}, simultaneous=True)
+            out["plot"] = json.dumps({"t": "surface", "e": sp.sstr(e)})
             out["kind"] = "function"
     else:
         try:
