@@ -234,14 +234,18 @@ class InkView(context: Context, private val colors: Palette) : View(context) {
         val gap = a.textSize * 0.15f
         val total = rows.sumOf { it.h.toDouble() }.toFloat() + gap * (rows.size - 1).coerceAtLeast(0)
         val maxW = rows.maxOfOrNull { it.w } ?: 0f
-        // to the right of the item, unless that runs past the first screen width while the space below is free
+        // to the right of the item, unless that runs past the right edge of what is on screen now:
+        // then under the item, kept inside the visible part of the sheet, if nothing is written there
         var left = a.x
         var top = a.centerY - total / 2
-        if (width > 0 && a.x + maxW > width - 8 * density && maxW < width - 16 * density &&
-            isFree(a.belowX, a.belowY, maxW, total)
-        ) {
-            left = a.belowX
-            top = a.belowY
+        val visLeft = offsetX + 8 * density
+        val visRight = offsetX + width - 8 * density
+        if (width > 0 && a.x + maxW > visRight && maxW < visRight - visLeft) {
+            val belowLeft = a.belowX.coerceIn(visLeft, visRight - maxW)
+            if (isFree(belowLeft, a.belowY, maxW, total)) {
+                left = belowLeft
+                top = a.belowY
+            }
         }
         answerPaint.textSize = a.textSize
         answerPaint.color = if (a.muted) colors.muted else colors.accent
