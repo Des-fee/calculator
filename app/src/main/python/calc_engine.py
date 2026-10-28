@@ -14,6 +14,7 @@ using JSON strings.
 
 import ctypes
 import json
+import sys
 import math
 import re
 import threading
@@ -60,6 +61,11 @@ LETTER_FUNCS = [
     (["l", "n"], "log"),
     (["l", "g"], "lg"),
     (["t", "g"], "tan"),
+    # functions read letter by letter (the recogniser often does this instead of \\sin)
+    (["s", "i", "n"], "sin"),
+    (["c", "o", "s"], "cos"),
+    (["t", "a", "n"], "tan"),
+    (["l", "o", "g"], "log"),
 ]
 GREEK = {
     "\\alpha": "α",
@@ -414,10 +420,59 @@ class TokenConverter:
         return " limit(%s, %s, %s)" % (body, var, self.sub(target))
 
 
+_CLOSE = {")": "(", "]": "[", "}": "{"}
+
+
+def _operand_start(toks, end):
+    """Index where the operand ending at toks[end] starts: a bracket group or a single token."""
+    t = toks[end]
+    if t in _CLOSE:
+        depth = 0
+        for k in range(end, -1, -1):
+            if toks[k] == t:
+                depth += 1
+            elif toks[k] == _CLOSE[t]:
+                depth -= 1
+                if depth == 0:
+                    # a "{...}" group may belong to a command like \\sqrt or \\frac before it
+                    while k > 0 and toks[k - 1] in ("}", "]") and toks[k] == "{":
+                        k = _operand_start(toks, k - 1)
+                    if k > 0 and toks[k - 1].startswith("\\") and toks[k - 1] not in ("\\times", "\\cdot", "\\div"):
+                        k -= 1
+                    elif k > 1 and toks[k - 1] in ("^", "_"):  # an exponent: the operand includes its base
+                        k = _operand_start(toks, k - 2)
+                    return k
+        return 0
+    return end
+
+
+def rewrite_primes(toks):
+    """(x^3)' -> d/dx (x^3); a double prime is the second derivative."""
+    toks = list(toks)
+    while "\\prime" in toks:
+        i = toks.index("\\prime")
+        j = i
+        while j + 1 < len(toks) and toks[j + 1] == "\\prime":
+            j += 1
+        n = j - i + 1
+        if i >= 2 and toks[i - 2:i] == ["^", "{"] and j + 1 < len(toks) and toks[j + 1] == "}":
+            start_tail, end_tail, base_end = i - 2, j + 2, i - 3  # x ^ { \\prime }
+        else:
+            start_tail, end_tail, base_end = i, j + 1, i - 1  # x \\prime
+        if base_end < 0:
+            del toks[i:j + 1]
+            continue
+        b = _operand_start(toks, base_end)
+        operand = toks[b:base_end + 1]
+        d = ["\\frac", "{", "d", "}", "{", "d", "x", "}"]
+        toks[b:end_tail] = d * n + ["("] + operand + [")"]
+    return toks
+
+
 def tokens_to_text(tokens):
     if isinstance(tokens, str):
         tokens = tokens.split()
-    return TokenConverter(list(tokens)).convert()
+    return TokenConverter(rewrite_primes(tokens)).convert()
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +524,8 @@ def normalize_text(text):
 
 
 MAX_LOG10 = 100_000  # numbers with more digits than this are only estimated, never computed
+if hasattr(sys, "set_int_max_str_digits"):
+    sys.set_int_max_str_digits(MAX_LOG10 + 100)  # "Точно" shows every digit
 
 
 class TooBig(CalcError):
@@ -1243,16 +1300,55 @@ def evaluate_trailing(lhs_text, forced):
         return [X(result)], plot
     if re.fullmatch(r"\s*-?\s*\d+(\.\d+)?\s*", lhs_text) and not forced:
         return None, None
-    return value_line(result, decimal), None
+    line = Line(value_line(result, decimal))
+    line.exact = exact_text(result)
+    return line, None
+
+
+class Line(list):
+    """An answer line; `exact` holds the full value when the line shows a shortened one."""
+    exact = None
+
+
+EXACT_DIGITS = 50
+
+
+def exact_text(expr):
+    """All digits of a big integer, or 50 significant digits of an irrational value; None if nothing is hidden."""
+    try:
+        if isinstance(expr, sp.Integer):
+            return str(int(expr.p)).replace("-", "−") if is_big_int(expr) else None
+        if isinstance(expr, sp.Rational) and _is_finite_decimal(expr) and expr.q < 10 ** 12:
+            return None
+        if expr.is_number and not expr.free_symbols and not isinstance(expr, sp.MatrixBase):
+            v = sp.N(expr, EXACT_DIGITS + 5)
+            if v.is_real:
+                with mpmath.workdps(EXACT_DIGITS + 5):
+                    m = mpmath.mpf(v._mpf_)
+                    text = mpmath.nstr(m, EXACT_DIGITS, min_fixed=-6, max_fixed=EXACT_DIGITS)
+                mant, _, exp = text.partition("e")
+                if "." in mant:
+                    mant = mant.rstrip("0").rstrip(".")
+                if exp:
+                    return "%s·10%s" % (mant.replace("-", "−"), str(int(exp)).translate(SUP))
+                return mant.replace("-", "−")
+    except Exception:  # noqa: BLE001 - optional
+        return None
+    return None
 
 
 def answer(kind, lines=None, plot=None, sep="; "):
-    """Result dict: `answer` is Unicode text (lines joined by `sep`), `tex` the typeset lines."""
+    """Result dict: `answer` is Unicode text (lines joined by `sep`), `tex` the typeset lines,
+    `exact` the full value behind a shortened one (one-line answers only)."""
     if not lines:
         return {"kind": kind, "answer": None, "tex": None, "plot": plot}
     # ✓ / ✗ marks read better as handwriting than as typeset symbols
     tex = None if kind == "check" else [line_tex(l) for l in lines]
-    return {"kind": kind, "answer": sep.join(line_text(l) for l in lines), "tex": tex, "plot": plot}
+    res = {"kind": kind, "answer": sep.join(line_text(l) for l in lines), "tex": tex, "plot": plot}
+    exact = getattr(lines[0], "exact", None) if len(lines) == 1 else None
+    if exact:
+        res["exact"] = exact
+    return res
 
 
 def process(text, forced=False):

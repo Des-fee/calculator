@@ -41,6 +41,10 @@ class MainActivity : Activity(), InkView.Listener {
     private lateinit var answerView: MathView
     private lateinit var editButton: TextView
     private lateinit var copyButton: TextView
+    private lateinit var exactButton: TextView
+
+    /** Answer shown with all its digits (by result id and value), null = shortened. */
+    private var exactShown: String? = null
     private lateinit var timerView: TextView
     private lateinit var graphButton: TextView
     private lateinit var eraserButton: TextView
@@ -252,8 +256,10 @@ class MainActivity : Activity(), InkView.Listener {
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         editButton = chip("✎ " + getString(R.string.fix)) { editFocused() }
         copyButton = chip("⧉ " + getString(R.string.copy)) { copyFocused() }
+        exactButton = chip(getString(R.string.exact)) { toggleExact() }
         graphButton = chip("📈 " + getString(R.string.graph)) { openGraphForFocused() }
         actions.addView(copyButton)
+        actions.addView(exactButton)
         actions.addView(editButton)
         actions.addView(graphButton)
         val inputRow = LinearLayout(this).apply {
@@ -271,7 +277,7 @@ class MainActivity : Activity(), InkView.Listener {
             setPadding(0, 0, 0, dpi(6f))
         }
         panel.addView(timerView)
-        panel.addView(actions)
+        panel.addView(scrolled(actions))
 
         // keyboard input (hidden by default)
         keyboardRow = LinearLayout(this).apply {
@@ -348,9 +354,24 @@ class MainActivity : Activity(), InkView.Listener {
             .show()
     }
 
+    private fun shownResult(): Engine.Result? {
+        val kb = keyboardResult
+        return if (keyboardRow.visibility == View.VISIBLE && kb != null) kb else focusedId?.let { results[it] }
+    }
+
+    private fun exactKey(r: Engine.Result) = r.id + "|" + r.exact
+
+    private fun toggleExact() {
+        val r = shownResult() ?: return
+        if (r.exact == null) return
+        exactShown = if (exactShown == exactKey(r)) null else exactKey(r)
+        updatePanel()
+    }
+
     /** The answer of the focused item (or its preview) as plain text. */
     private fun answerTextOf(r: Engine.Result?): String? = when {
         r == null || r.error != null -> null
+        r.exact != null && exactShown == exactKey(r) -> r.exact
         r.answer != null -> r.answer.replace("\n", "; ")
         r.preview != null -> r.preview
         else -> null
@@ -710,6 +731,7 @@ class MainActivity : Activity(), InkView.Listener {
 
     private fun setStatus(main: String, detail: String?) {
         copyButton.visibility = View.GONE
+        exactButton.visibility = View.GONE
         inputLabel.text = ""
         inputView.show(null, detail ?: "")
         answerView.show(null, main)
@@ -735,6 +757,11 @@ class MainActivity : Activity(), InkView.Listener {
         when {
             r.error != null -> answerView.show(null, r.error)
             r.kind == "function" -> answerView.show(null, getString(R.string.function_hint))
+            r.exact != null && exactShown == exactKey(r) -> {
+                // all digits, 40 per line; the panel scrolls sideways for the rest
+                answerView.color = colors.accent
+                answerView.show(null, r.exact.chunked(40).joinToString("\n"))
+            }
             r.answer != null -> {
                 val sep = if (r.kind == "system") "\n" else "; "
                 val lines = r.answer.split(sep).joinToString("\n")
@@ -750,6 +777,8 @@ class MainActivity : Activity(), InkView.Listener {
             else -> answerView.show(null, getString(R.string.no_answer))
         }
         copyButton.visibility = if (answerTextOf(r) != null) View.VISIBLE else View.GONE
+        exactButton.visibility = if (r.exact != null && r.error == null) View.VISIBLE else View.GONE
+        exactButton.text = getString(if (r.exact != null && exactShown == exactKey(r)) R.string.short_value else R.string.exact)
         editButton.visibility = if (r.id != "kb") View.VISIBLE else View.GONE
         graphButton.visibility = if (r.plot != null) View.VISIBLE else View.GONE
     }

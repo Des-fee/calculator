@@ -188,6 +188,24 @@ def test_preview_limit_big():
     assert r.get("timeout") and r["id"] == "t2" and time.time() - t0 < 0.5, r
 
 
+def test_letters_primes_exact():
+    def run(toks):
+        return json.loads(ce.evaluate_document(json.dumps([{"id": "a", "type": "line", "tokens": toks.split()}])))[0]
+
+    # sin written letter by letter is the function, not s·i·n
+    assert run("\\lim _ { x \\rightarrow 0 } \\frac { s i n ( x ) } { x } =")["answer"] == "1"
+    assert run("c o s ( 0 ) =")["answer"] == "1"
+    # derivatives with a prime
+    assert run("( x ^ { 3 } ) ^ { \\prime } =")["answer"] == "3x²"
+    assert run("x ^ { 3 } \\prime =")["answer"] == "3x²"
+    assert run("( s i n x ) ^ { \\prime \\prime } =")["answer"] == "−sin(x)"
+    # the full value behind a shortened answer
+    r = run("2 ^ { 1 0 0 0 } =")
+    assert r["answer"] == "1.0715086·10³⁰¹" and len(r["exact"]) == 302 and r["exact"].startswith("10715086071862673"), r
+    assert run("\\sqrt { 2 } =")["exact"] == "1.4142135623730950488016887242096980785696718753769"
+    assert "exact" not in run("2 + 2 =")
+
+
 def test_plot():
     data = json.loads(ce.plot_points("y = 1/x", -1.0, 1.0, 5))
     assert data["ys"][2] is None and data["ys"][0] == -1.0, data

@@ -33,6 +33,8 @@ class Engine(context: Context) {
         val preview: String? = null,
         val previewTex: String? = null,
         val timedOut: Boolean = false,
+        /** Every digit of a shortened answer (2^1000, √2 to 50 digits). */
+        val exact: String? = null,
     )
 
     /** Seconds one item may take (0 = no limit). */
@@ -56,6 +58,7 @@ class Engine(context: Context) {
                 preview = o.optStringOrNull("preview"),
                 previewTex = o.optStringOrNull("preview_tex"),
                 timedOut = o.optBoolean("timeout", false),
+                exact = o.optStringOrNull("exact"),
             )
             map[r.id] = r
         }
