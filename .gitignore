@@ -8,3 +8,7 @@ __pycache__/
 app/src/main/assets/model/
 model-out/
 calculator.apk
+
+# signing keys are never committed unencrypted
+*.jks
+*.keystore

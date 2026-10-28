@@ -23,23 +23,24 @@ android {
         }
     }
 
+    // The release key is decrypted by CI from keystore/release.jks.enc (secret SIGNING_PASSWORD).
+    // Without it (local builds) the APK is signed with the debug key.
+    val releaseKey = System.getenv("KEYSTORE_FILE")?.let { file(it) }?.takeIf { it.exists() }
     signingConfigs {
-        create("release") {
-            // The keystore lives in the private repository; CI can override it with secrets.
-            storeFile = file(System.getenv("KEYSTORE_FILE") ?: "../keystore/release.jks")
-            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "calc-release-2026"
-            keyAlias = System.getenv("KEY_ALIAS") ?: "calculator"
-            keyPassword = System.getenv("KEY_PASSWORD") ?: "calc-release-2026"
+        if (releaseKey != null) {
+            create("release") {
+                storeFile = releaseKey
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS") ?: "calculator"
+                keyPassword = System.getenv("KEY_PASSWORD") ?: System.getenv("KEYSTORE_PASSWORD")
+            }
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
-        }
-        debug {
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 

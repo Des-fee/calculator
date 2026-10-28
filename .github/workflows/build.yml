@@ -112,6 +112,19 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - name: Signing key
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$SIGNING_PASSWORD" ]; then
+            echo "::error title=Signing::add the repository secret SIGNING_PASSWORD (Settings → Secrets and variables → Actions)"
+            exit 1
+          fi
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in keystore/release.jks.enc \
+            -out "$RUNNER_TEMP/release.jks" -pass env:SIGNING_PASSWORD
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PASSWORD=$SIGNING_PASSWORD" >> "$GITHUB_ENV"
+
       - name: Build release APK
         env:
           BUILD_NUMBER: ${{ github.run_number }}
@@ -140,6 +153,8 @@ jobs:
 
   device-test:
     name: Emulator test
+    # GitHub's emulator stopped booting on its runners (Oct 2026); run manually when it works again
+    if: github.event_name == 'workflow_dispatch'
     needs: model
     runs-on: ubuntu-latest
     timeout-minutes: 45
