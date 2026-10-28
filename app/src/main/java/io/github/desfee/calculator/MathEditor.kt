@@ -116,7 +116,7 @@ class MathEditor(context: Context, private val colors: Palette, private val list
 
         // tabs
         val tabRow = LinearLayout(context).apply { orientation = HORIZONTAL; setPadding(0, dp(4f), 0, dp(4f)) }
-        for (name in listOf("123", "f(x)", "x y", "∫ Σ")) {
+        for (name in listOf("123", "f(x)", "x y", "∫ Σ", "ещё")) {
             val t = TextView(context).apply {
                 text = name
                 textSize = 14f
@@ -164,6 +164,12 @@ class MathEditor(context: Context, private val colors: Palette, private val list
             listOf(Key("∞", "oo"), Key("mod", " mod "), Key("y′", "y'"), Key("y″", "y''"), Key("det", "det([[|, 0], [0, 1]])"), Key("[[ ]]", "[[|, 0], [0, 1]]")),
             listOf(Key("x", "x"), Key("y", "y"), Key("n", "n"), Key(",", ", "), Key(";", "; "), Key("=", "=")),
             listOf(left, right, Key("(", "("), Key(")", ")"), back, enter),
+        ))
+        addPage("ещё", listOf(
+            listOf(Key("i", "i"), Key("°", "°"), Key("%", "%"), Key("C(n,k)", "C(|, )"), Key("A(n,k)", "A(|, )"), Key("n!", "!")),
+            listOf(Key("на множ.", "factorint(|)"), Key("простое?", "isprime(|)"), Key("делители", "divisors(|)"), Key("НОД", "gcd(|, )"), Key("НОК", "lcm(|, )"), Key("в 2-ю", "bin(|)")),
+            listOf(Key("среднее", "mean(|)"), Key("медиана", "median(|)"), Key("σ", "std(|)"), Key("λ матр.", "eigenvals(|)"), Key("ранг", "rank(|)"), Key("экстр.", "extrema(|)")),
+            listOf(Key("max", "max(|, x, 0, 1)"), Key("min", "min(|, x, 0, 1)"), Key("Тейлор", "taylor(|, x, 0, 6)"), left, right, back),
         ))
         showPage("123")
     }

@@ -239,6 +239,29 @@ def test_keyboard_forms():
     assert ce.display_tex("x+y=3; x-y=1") == "\\begin{cases}x + y = 3\\\\x - y = 1\\end{cases}"
 
 
+def test_phase1():
+    def ans(t):
+        r = json.loads(ce.evaluate_document(json.dumps([{"id": "a", "type": "text", "text": t, "forced": True}])))[0]
+        assert "answer" in r and r["answer"], (t, r)
+        return r["answer"]
+
+    cases = {
+        "(1+2i)*(3-i)=": "5 + 5i", "abs(3+4i)=": "5", "x^2+2x+5=0": "x₁ = −1 − 2i; x₂ = −1 + 2i",
+        "sum(i, i, 1, 10)=": "55", "sin(30°)=": "1/2 = 0.5", "200+15%=": "230", "15% * 200=": "30",
+        "17 % 5=": "2", "factorint(360)=": "2³·3²·5", "isprime(91)=": "составное, делится на 7",
+        "C(5,2)=": "10", "A(5,2)=": "20", "P(5)=": "120", "100 in binary=": "1100100₂", "hex(255)=": "FF₁₆",
+        "0xFF=": "255", "round(2.567, 2)=": "2.57", "apart(1/(x^2-1))=": "−1/(2x + 2) + 1/(2x − 2)",
+        "mean(1,2,3,4)=": "5/2 = 2.5", "median(1,3,2)=": "2", "std(2,4,4,4,5,5,7,9)=": "2",
+        "eigenvals([[2,1],[1,2]])=": "λ = 1; λ = 3", "rank([[1,2],[2,4]])=": "1", "dot([1,2,3],[4,5,6])=": "32",
+        "max(x^2-4x, x, 0, 5)=": "5", "extrema(x^3-3x)=": "x = −1: максимум f = 2; x = 1: минимум f = −2",
+        "|x-2|=5": "x₁ = −3; x₂ = 7", "tg(x)=1": "x = πk + π/4, k ∈ ℤ", "sin(x)=2": "нет действительных решений",
+        "y'=y; y(0)=1": "y = eˣ", "y''+y=0; y(0)=0; y'(0)=1": "y = sin(x)",
+    }
+    for t, expected in cases.items():
+        got = ans(t)
+        assert got == expected, (t, got, expected)
+
+
 def test_plot():
     data = json.loads(ce.plot_points("y = 1/x", -1.0, 1.0, 5))
     assert data["ys"][2] is None and data["ys"][0] == -1.0, data

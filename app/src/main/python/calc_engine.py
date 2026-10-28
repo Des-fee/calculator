@@ -529,12 +529,196 @@ def _kb_sum(fn):
     return f
 
 
+# ---------------------------------------------------------------------------
+# More functions: number theory, combinatorics, bases, statistics, linear algebra, analysis
+# ---------------------------------------------------------------------------
+
+class Answer:
+    """A ready answer line (text + LaTeX) returned by a function, for results that are not one SymPy value."""
+
+    def __init__(self, line):
+        self.line = line
+
+
+def _ints(*args):
+    out = []
+    for a in args:
+        a = sp.sympify(a)
+        if not a.is_Integer:
+            raise CalcError("нужно целое число")
+        out.append(int(a))
+    return out
+
+
+def _factorint(n):
+    (n,) = _ints(n)
+    if n in (0, 1, -1):
+        return Answer([NUM(n)])
+    f = sp.factorint(n)
+    sign = "−" if n < 0 else ""
+    text = sign + "·".join(("%d%s" % (p, str(e).translate(SUP) if e > 1 else "")) for p, e in sorted(f.items()) if p != -1)
+    tex = ("-" if n < 0 else "") + r" \cdot ".join(("%d^{%d}" % (p, e) if e > 1 else str(p)) for p, e in sorted(f.items()) if p != -1)
+    return Answer([(text, tex)])
+
+
+def _isprime(n):
+    (n,) = _ints(n)
+    if n < 2:
+        return Answer([W("не простое")])
+    if sp.isprime(n):
+        return Answer([W("простое")])
+    p = min(sp.factorint(n))
+    return Answer([W("составное, делится на %d" % p)])
+
+
+def _divisors(n):
+    (n,) = _ints(n)
+    ds = sp.divisors(abs(n))
+    shown = ", ".join(str(d) for d in ds[:40]) + (", …" if len(ds) > 40 else "")
+    return Answer([(shown + "  (%d шт.)" % len(ds), shown + r"\quad (%d\ \text{шт.})" % len(ds))])
+
+
+def _arrangements(n, k):
+    return sp.ff(n, k)
+
+
+def _perm(n, k=None):
+    return sp.factorial(n) if k is None else sp.ff(n, k)
+
+
+def _in_base(n, b):
+    (n, b) = _ints(n, b)
+    if not 2 <= b <= 36:
+        raise CalcError("основание от 2 до 36")
+    digits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    m, out = abs(n), ""
+    while True:
+        out = digits[m % b] + out
+        m //= b
+        if not m:
+            break
+    out = ("−" if n < 0 else "") + out
+    return Answer([(out + str(b).translate(SUB), r"\mathrm{%s}_{%d}" % (out.replace("−", "-"), b))])
+
+
+def _round(x, n=0):
+    from decimal import Decimal, ROUND_HALF_UP
+    (n,) = _ints(n)
+    d = Decimal(str(sp.N(x, 40))).quantize(Decimal(1).scaleb(-n), rounding=ROUND_HALF_UP)
+    return sp.Integer(int(d)) if n <= 0 else sp.Float(str(d), 40)
+
+
+def _data(args):
+    if len(args) == 1 and isinstance(args[0], (list, tuple, sp.MatrixBase)):
+        args = list(args[0])
+    vals = [sp.nsimplify(sp.sympify(a), rational=True) if isinstance(sp.sympify(a), sp.Float) else sp.sympify(a) for a in args]
+    if not vals:
+        raise CalcError("нет данных")
+    return vals
+
+
+def _mean(*a):
+    v = _data(a)
+    return sp.Add(*v) / len(v)
+
+
+def _median(*a):
+    v = sorted(_data(a))
+    n = len(v)
+    return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
+
+
+def _mode(*a):
+    v = _data(a)
+    counts = {}
+    for x in v:
+        counts[x] = counts.get(x, 0) + 1
+    top = max(counts.values())
+    modes = [x for x in v if counts[x] == top]
+    return modes[0] if len(set(modes)) == 1 else Answer([X(sorted(set(modes)))])
+
+
+def _var(*a, sample=False):
+    v = _data(a)
+    m = sp.Add(*v) / len(v)
+    return sp.Add(*[(x - m) ** 2 for x in v]) / (len(v) - (1 if sample else 0))
+
+
+def _matrix(m):
+    return m if isinstance(m, sp.MatrixBase) else sp.Matrix(m)
+
+
+def _eigenvals(m):
+    ev = _matrix(m).eigenvals()
+    line = []
+    for k, (val, mult) in enumerate(sorted(ev.items(), key=lambda t: sp.default_sort_key(t[0]))):
+        if k:
+            line.append(("; ", r";\quad "))
+        line += [("λ = ", r"\lambda = "), X(val)] + ([(" (×%d)" % mult, r"\ (\times %d)" % mult)] if mult > 1 else [])
+    return Answer(line)
+
+
+def _eigenvects(m):
+    line = []
+    for k, (val, mult, vecs) in enumerate(_matrix(m).eigenvects()):
+        if k:
+            line.append(("; ", r";\quad "))
+        line += [("λ = ", r"\lambda = "), X(val), (": ", r":\ ")]
+        for j, v in enumerate(vecs):
+            if j:
+                line.append((", ", ",\ "))
+            line.append(X(v.T))
+    return Answer(line)
+
+
+def _dot(u, v):
+    return (_matrix(u).T * _matrix(v))[0] if _matrix(u).shape[1] == 1 else _matrix(u).dot(_matrix(v))
+
+
+def _cross(u, v):
+    return _matrix(u).cross(_matrix(v)).T
+
+
+def _taylor(f, x=None, a=0, n=6):
+    x = x if x is not None else sp.Symbol("x")
+    return sp.series(f, x, a, n).removeO()
+
+
+def _maxmin(fn_sympy, util):
+    def f(*args):
+        if len(args) == 4 and isinstance(args[1], sp.Symbol):  # max(f, x, a, b): on a segment
+            return util(args[0], args[1], sp.Interval(args[2], args[3]))
+        if len(args) == 2 and isinstance(args[1], sp.Symbol):  # max(f, x): on the whole line
+            return util(args[0], args[1], sp.S.Reals)
+        return fn_sympy(*args)
+    return f
+
+
+def _extrema(f, x=None):
+    """Critical points of f(x) with their kind: x = …: минимум f = …"""
+    x = x if x is not None else (sorted(sp.sympify(f).free_symbols, key=str) or [sp.Symbol("x")])[0]
+    f = sp.sympify(f)
+    d1 = sp.diff(f, x)
+    pts = [p for p in sp.solve(d1, x) if p.is_real is not False and not p.has(sp.I)]
+    if not pts:
+        return Answer([W("экстремумов нет")])
+    d2 = sp.diff(d1, x)
+    line = []
+    for k, p in enumerate(sorted(pts, key=lambda q: float(sp.N(q)) if q.is_number else 0)):
+        sec = sp.simplify(d2.subs(x, p))
+        kind = "минимум" if sec.is_positive else "максимум" if sec.is_negative else "перегиб?"
+        if k:
+            line.append(("; ", r";\quad "))
+        line += [X(x), O("="), X(p), (": " + kind + " ", r":\ \text{%s}\ " % kind), ("f", "f"), O("="), X(sp.simplify(f.subs(x, p)))]
+    return Answer(line)
+
+
 def _local_dict():
     d = {}
     for ch in "abcdfghjklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ":
         d[ch] = sp.Symbol(ch)
     d["e"] = sp.E
-    d["i"] = sp.Symbol("i")
+    d["i"] = sp.I  # the imaginary unit; a summation index i is handled in parse()
     d["lg"] = lambda x: sp.log(x, 10)
     d["ln"] = sp.log
     d["tg"] = sp.tan
@@ -546,9 +730,28 @@ def _local_dict():
     d["int"] = _kb_int(sp.integrate)
     d["lim"] = _kb_lim(sp.limit)
     d["sum"] = _kb_sum(sp.summation)
-    d["det"] = lambda m: sp.Matrix(m).det()
-    d["inv"] = lambda m: sp.Matrix(m).inv()
+    d["det"] = lambda m: _matrix(m).det()
+    d["inv"] = lambda m: _matrix(m).inv()
     d["T"] = sp.Symbol("T")
+    d.update({
+        "factorint": _factorint, "factorize": _factorint, "isprime": _isprime, "divisors": _divisors,
+        "totient": sp.totient, "phi": sp.totient, "gcd": sp.gcd, "lcm": sp.lcm, "nod": sp.gcd, "nok": sp.lcm,
+        "binomial": sp.binomial, "_arr": _arrangements, "_perm": _perm,
+        "bin": lambda n: _in_base(n, 2), "oct": lambda n: _in_base(n, 8), "hex": lambda n: _in_base(n, 16),
+        "base": _in_base, "round": _round,
+        "mean": _mean, "average": _mean, "median": _median, "mode": _mode,
+        "var": lambda *a: _var(*a), "std": lambda *a: sp.sqrt(_var(*a)),
+        "svar": lambda *a: _var(*a, sample=True), "sstd": lambda *a: sp.sqrt(_var(*a, sample=True)),
+        "eigenvals": _eigenvals, "eigenvects": _eigenvects, "rank": lambda m: _matrix(m).rank(),
+        "transpose": lambda m: _matrix(m).T, "trace": lambda m: _matrix(m).trace(),
+        "rref": lambda m: _matrix(m).rref()[0], "nullspace": lambda m: Answer([X([v.T for v in _matrix(m).nullspace()])]),
+        "charpoly": lambda m: _matrix(m).charpoly(sp.Symbol("lambda")).as_expr(),
+        "dot": _dot, "cross": _cross,
+        "taylor": _taylor,
+        "max": _maxmin(sp.Max, __import__("sympy.calculus.util", fromlist=["maximum"]).maximum),
+        "min": _maxmin(sp.Min, __import__("sympy.calculus.util", fromlist=["minimum"]).minimum),
+        "extrema": _extrema, "extremum": _extrema,
+    })
     return d
 
 
@@ -565,6 +768,18 @@ def normalize_text(text):
     s = s.replace("−", "-").replace("–", "-").replace("×", "*").replace("·", "*")
     s = s.replace("÷", "/").replace(":", "/").replace("≤", "<=").replace("≥", ">=").replace("≠", "!=")
     s = s.replace("π", "pi").replace("∞", "oo").replace("∫", "int")
+    # degrees: sin 30° = sin(30·π/180)
+    s = re.sub(r"(\d+(?:\.\d+)?)\s*°", r"(\1*pi/180)", s).replace("°", "*pi/180")
+    # percent: 200 + 15% = 230, 15% = 0.15 (a "%" followed by a number is the remainder: 17 % 5)
+    s = re.sub(r"^(.*\S)\s*([+\-])\s*(\d+(?:\.\d+)?)\s*%\s*$", r"(\1)*(1\2\3/100)", s)
+    s = re.sub(r"(\d+(?:\.\d+)?)\s*%(?!\s*[\w(.])", r"(\1/100)", s)
+    # combinatorics in school notation: C(n, k), A(n, k), P(n)
+    s = re.sub(r"\bC\s*\(", "binomial(", s)
+    s = re.sub(r"\bA\s*\(", "_arr(", s)
+    s = re.sub(r"\bP\s*\(", "_perm(", s)
+    # number bases: "100 in binary" / "в двоичной"
+    s = re.sub(r"(\S+)\s+(?:in|в)\s+(?:binary|двоичн\w*)", r"bin(\1)", s)
+    s = re.sub(r"(\S+)\s+(?:in|в)\s+(?:hex|шестнадцатеричн\w*)", r"hex(\1)", s)
     s = re.sub(r"([⁰¹²³⁴⁵⁶⁷⁸⁹⁻]+)", lambda m: "^(" + m.group(1).translate(SUPERSCRIPTS) + ")", s)
     s = re.sub(r"√\s*(\d+(?:\.\d+)?|[A-Za-z])", r"sqrt(\1)", s)
     s = s.replace("√", "sqrt")
@@ -704,12 +919,15 @@ def parse(text):
     try:
         # look before computing: an exact 2^2^2^2^2^2 would never finish
         _magnitude(parse_expr(norm, local_dict=DISPLAY_LOCALS, transformations=TRANSFORMS, evaluate=False))
-    except CalcError:
+    except TooBig:
         raise
     except Exception:  # noqa: BLE001 - only an early check
         pass
+    loc = LOCALS
+    if re.search(r"\(\s*i\s*,", norm) or re.search(r",\s*i\s*,", norm):  # i is a summation index here
+        loc = dict(LOCALS, i=sp.Symbol("i"))
     try:
-        return parse_expr(norm, local_dict=LOCALS, transformations=TRANSFORMS)
+        return parse_expr(norm, local_dict=loc, transformations=TRANSFORMS)
     except CalcError:
         raise
     except Exception as ex:  # noqa: BLE001 - every parser error is a user error here
@@ -1440,6 +1658,39 @@ def numeric_system(eqs, symbols, tries=60, seconds=5.0):
     return sorted(found)
 
 
+def _periodic_solutions(eq, var):
+    """All solutions of a trigonometric equation: x = π/6 + 2πk, k ∈ ℤ (None if SymPy gives no such form)."""
+    box = {}
+
+    def run():
+        box["s"] = sp.solveset(eq.lhs - eq.rhs, var, domain=sp.S.Reals)
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(EXACT_SOLVE_SECONDS)
+    st = box.get("s")
+    if st is None or t.is_alive():
+        return None
+    if st is sp.S.EmptySet:
+        return [[W("нет действительных решений")]]
+    parts = list(st.args) if isinstance(st, sp.Union) else [st]
+    if not any(isinstance(p, sp.ImageSet) for p in parts):
+        return None
+    k = sp.Symbol("k", integer=True)
+    lines = []
+    for p in parts:
+        if isinstance(p, sp.ImageSet) and p.base_sets[0] == sp.S.Integers:
+            n = p.lamda.variables[0]
+            expr = p.lamda.expr.subs(n, k)
+            expr = expr.xreplace({f: sp.Float(f, 10) for f in expr.atoms(sp.Float)})
+            lines.append([X(var), O("="), X(expr), (", k ∈ ℤ", r",\ k \in \mathbb{Z}")])
+        elif isinstance(p, sp.FiniteSet):
+            lines += [[X(var), O("=")] + value_line(v) for v in p]
+        else:
+            return None
+    return lines[:MAX_ROOTS]
+
+
 def assign(name, value):
     """'x = value', or 'x ≈ value' when the value is only approximate."""
     if value and value[0][0] == "≈ ":
@@ -1451,7 +1702,16 @@ def solve_equation(eq, decimal):
     """Answer lines, one per root."""
     symbols = order_vars(eq.free_symbols)
     var = symbols[0]
-    sols = _solve_or_none(lambda: sp.solve(eq, var, dict=False))
+    if eq.has(sp.Abs) or eq.has(sp.sign):
+        # |x − 2| = 5: SymPy needs to know x is real to open the modulus
+        real = sp.Symbol(var.name, real=True)
+        sols = _solve_or_none(lambda: [s.subs(real, var) for s in sp.solve(eq.subs(var, real), real, dict=False)])
+    else:
+        sols = _solve_or_none(lambda: sp.solve(eq, var, dict=False))
+    if len(symbols) == 1 and eq.has(sp.sin, sp.cos, sp.tan, sp.cot):
+        periodic = _periodic_solutions(eq, var)
+        if periodic:
+            return periodic
     if sols is None:
         # no formula (2^x = x^2 + 1, cos x = x): find the real roots numerically
         if len(symbols) > 1:
@@ -1460,7 +1720,7 @@ def solve_equation(eq, decimal):
         if not roots:
             return [[W("действительных корней не найдено")]]
         more = 0
-        if len(roots) > MAX_ROOTS:  # periodic functions have endlessly many: show those nearest to 0
+        if len(roots) > MAX_ROOTS + 3:  # periodic functions have endlessly many: show those nearest to 0
             more = len(roots) - MAX_ROOTS
             roots = sorted(sorted(roots, key=abs)[:MAX_ROOTS])
         name = lambda k: (fmt(var) + (str(k).translate(SUB) if len(roots) > 1 else ""),
@@ -1557,7 +1817,7 @@ def solve_system(eqs, decimal):
     if rels:
         symbols = order_vars(set().union(*[e.free_symbols for e in eqs]))
         if len(symbols) != 1:
-            raise CalcError("система неравенств должна содержать одну переменную")
+            raise CalcError("неравенства с двумя переменными задают область на плоскости — её покажет график (скоро)")
         res = sp.reduce_inequalities(eqs, symbols[0])
         if res is sp.false:
             return [[W("нет решений")]]
@@ -1610,8 +1870,18 @@ def evaluate_trailing(lhs_text, forced):
         raw = parse(lhs_text)
     except TooBig as big:
         return too_big_line(big.log10), None
+    if isinstance(raw, Answer):
+        return raw.line, None
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        raw = sp.sympify(raw)
+    if isinstance(raw, (list, tuple, dict, bool)):
+        return [X(sp.sympify(raw) if not isinstance(raw, dict) else list(raw.items()))], None
     if isinstance(raw, sp.MatrixBase):
         return value_line(raw.applyfunc(sp.simplify)), None
+    if re.search(r"\b(apart|expand|factor|together|cancel|collect|expand_trig|trigsimp|series|taylor|rref|charpoly)\s*\(",
+                 normalize_text(lhs_text)):
+        # the user asked for this form: do not simplify it back
+        return [X(raw)], (lhs_text if raw.free_symbols <= {sp.Symbol("x")} and raw.free_symbols else None)
     result = simplify_value(raw)
     plot = None
     if result.free_symbols:
@@ -1816,8 +2086,43 @@ def process_mod(text, forced):
     return answer("solve", [[X(v), (" ≡ " + vals + n_txt, r" \equiv " + vals + n_tex)]])
 
 
+IC_RE = re.compile(r"^\s*y\s*((?:'|′)*)\s*\(\s*([^()]+?)\s*\)\s*=\s*(.+?)\s*$")
+
+
+def process_ivp(texts):
+    """A differential equation with initial conditions: y' = y; y(0) = 1 (None when the texts are not that)."""
+    ode = [t for t in texts if not IC_RE.match(t) and re.search(r"\by\b", t)
+           and ("'" in t or "′" in t or "diff(" in normalize_text(t))]
+    ics_text = [t for t in texts if IC_RE.match(t)]
+    if len(ode) != 1 or not ics_text or len(ode) + len(ics_text) != len(texts):
+        return None
+    x = sp.Symbol("x")
+    ics = {}
+    for t in ics_text:
+        m = IC_RE.match(t)
+        order = len(m.group(1).replace("′", "'"))
+        at, val = parse(m.group(2)), parse(m.group(3))
+        target = Y_OF_X.diff(x, order).subs(x, at) if order else Y_OF_X.subs(x, at)
+        ics[target] = val
+    pieces, ops = split_relation(ode[0])
+    if ops != ["="]:
+        return None
+    loc = dict(LOCALS, y=Y_OF_X)
+    lhs = parse_expr(normalize_text(pieces[0]), local_dict=loc, transformations=TRANSFORMS)
+    rhs = parse_expr(normalize_text(pieces[1]), local_dict=loc, transformations=TRANSFORMS)
+    try:
+        sol = sp.dsolve(sp.Eq(lhs, rhs), Y_OF_X, ics=ics)
+    except (NotImplementedError, ValueError) as ex:
+        raise CalcError("задача Коши не решается в формулах") from ex
+    sols = sol if isinstance(sol, list) else [sol]
+    return [[X(sp.Symbol("y")), O("="), X(s.rhs)] for s in sols[:MAX_ROOTS]]
+
+
 def process_system(texts):
     """Answer lines of a system written one equation per line."""
+    ivp = process_ivp(texts)
+    if ivp is not None:
+        return ivp
     eqs = []
     for t in texts:
         pieces, ops = split_relation(t)
