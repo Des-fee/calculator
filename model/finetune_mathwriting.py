@@ -64,7 +64,8 @@ VALID_MAX = 40 if SMOKE else 600                # MathWriting validation inks us
 EVAL_EVERY_MIN = 1 if SMOKE else 50
 MAX_BATCH = 4 if SMOKE else 16
 MAX_PIXELS = 2e5 if SMOKE else 3.6e5             # per batch (sum over images of padded H*W)
-LR = 2e-4
+# a second run continues from the fine-tuned weights and needs a gentler learning rate
+LR = float(os.environ.get("LR") or (1e-4 if os.environ.get("INIT_CKPT") else 2e-4))
 WARMUP = 20 if SMOKE else 1000
 
 sys.path.insert(0, COMER_DIR)
@@ -292,7 +293,8 @@ DESC = set("gpqy")
 BOXES = {"d": (0.0, 1.0), ".": (0.86, 1.0), "\\cdot": (0.53, 0.67), "+": (0.25, 0.9), "\\times": (0.32, 0.88), "\\div": (0.25, 0.92), "<": (0.3, 0.9), ">": (0.3, 0.9),
          "(": (-0.12, 1.15), ")": (-0.12, 1.15), "/": (-0.05, 1.08)}
 FLAT = {"-": 0.6, "=": 0.6}  # centre height of flat glyphs
-CALC_GLYPHS = set("0123456789xyabcdnt+-=()/<>.") | {"\\times", "\\div", "\\cdot", "\\int"}
+CALC_GLYPHS = set("0123456789xyabcdlimnt+-=()/<>.") | {"\\times", "\\div", "\\cdot", "\\int", "\\sum",
+                                                       "\\infty", "\\rightarrow"}
 
 
 class Layout:
@@ -447,13 +449,138 @@ def put_fraction(lay, glyphs, rng, scale=1.0):
     lay.x = x0 + width + rng.uniform(0.15, 0.3) * scale
 
 
+def _synthetic_glyph(tok, rng):
+    """Hand-drawn-looking ∞ and → for when the data has no isolated glyph of them."""
+    j = lambda: rng.uniform(-0.04, 0.04)  # noqa: E731
+    if tok == "\\infty":
+        t = np.linspace(0, 2 * math.pi, 40)
+        return [np.stack([np.sin(t) + j(), np.sin(t) * np.cos(t) * 1.1 + j()], 1).astype(np.float32)]
+    if tok == "\\rightarrow":
+        return [np.array([[0, 0], [1 + j(), j()]], dtype=np.float32),
+                np.array([[0.75, -0.18 + j()], [1, 0], [0.75, 0.18 + j()]], dtype=np.float32)]
+    raise KeyError(tok)
+
+
+def put_any(lay, tok, glyphs, rng, scale=1.0, dy=0.0):
+    """put() that falls back to a drawn ∞ / → when the data has no handwritten one."""
+    if tok in glyphs or tok not in ("\\infty", "\\rightarrow"):
+        return put(lay, tok, glyphs, rng, scale, dy)
+    ink = _synthetic_glyph(tok, rng)
+    width = rng.uniform(0.6, 0.9) * scale
+    cy = 0.62 * scale + dy
+    st, w = _fit(ink, lay.x, cy, cy, rng, width=width)
+    lay.strokes += st
+    lay.x += w + rng.uniform(0.12, 0.3) * scale
+    lay.tokens.append(tok)
+
+
+def put_term(lay, glyphs, rng, var):
+    """What follows ∑, lim or d/dx: 1/n², a power, sin x / x, a product."""
+    r = rng.random()
+    if r < 0.35:
+        sub = 0.8
+        num, den = Layout(), Layout()
+        put(num, "1", glyphs, rng, sub) if rng.random() < 0.6 else put_number(num, glyphs, rng, sub, decimal_p=0)
+        if rng.random() < 0.6:
+            put_power(den, glyphs, rng, lambda: put(den, var, glyphs, rng, sub), sub)
+        else:
+            put(den, var, glyphs, rng, sub)
+        width = max(num.x, den.x) + 0.2
+        x0 = lay.x
+        lay.strokes.append(np.array([[x0, 0.6], [x0 + width, 0.6 + rng.uniform(-0.03, 0.03)]], dtype=np.float32))
+        for part, top in ((num, 0.45 - sub), (den, 0.75)):
+            dx = x0 + (width - part.x) / 2
+            lay.strokes += [st + (dx, top) for st in part.strokes]
+        lay.tokens += ["\\frac", "{"] + num.tokens + ["}", "{"] + den.tokens + ["}"]
+        lay.x = x0 + width + 0.2
+    elif r < 0.7:
+        put_power(lay, glyphs, rng, lambda: put(lay, var, glyphs, rng))
+    else:
+        put_number(lay, glyphs, rng, decimal_p=0)
+        put(lay, var, glyphs, rng)
+
+
+def put_big_operator(lay, glyphs, rng, kind):
+    """∑ with limits (n = 1 … ∞), lim with x → a under it, or d/dx, followed by a term."""
+    var = "n" if kind == "sum" else "x"
+    x0 = lay.x
+    if kind == "sum":
+        st, w = _fit(rng.choice(glyphs["\\sum"]), x0, rng.uniform(-0.35, -0.15), rng.uniform(1.15, 1.35), rng)
+        lay.strokes += st
+        lay.tokens.append("\\sum")
+        s = rng.uniform(0.5, 0.7)
+        right = x0 + w
+        for sub_sup, dy in (("_", rng.uniform(1.25, 1.6)), ("^", rng.uniform(-0.75, -0.4) - s)):
+            lay.tokens += [sub_sup, "{"]
+            lay.x = x0 + w * rng.uniform(-0.1, 0.3)
+            if sub_sup == "_":
+                put(lay, "n", glyphs, rng, s, dy)
+                put(lay, "=", glyphs, rng, s, dy)
+                put(lay, rng.choice("01"), glyphs, rng, s, dy)
+            elif rng.random() < 0.6:
+                put_any(lay, "\\infty", glyphs, rng, s, dy)
+            else:
+                put_number(lay, glyphs, rng, s, dy, decimal_p=0)
+            lay.tokens.append("}")
+            right = max(right, lay.x)
+        lay.x = right + rng.uniform(0.1, 0.3)
+    elif kind == "lim":
+        for ch in "lim":
+            put(lay, ch, glyphs, rng)
+        lay.tokens[-3:] = ["\\lim"]
+        right = lay.x
+        s = rng.uniform(0.5, 0.7)
+        lay.x = x0 + rng.uniform(-0.2, 0.2)
+        dy = rng.uniform(1.15, 1.5)
+        lay.tokens += ["_", "{"]
+        put(lay, "x", glyphs, rng, s, dy)
+        put_any(lay, "\\rightarrow", glyphs, rng, s, dy)
+        if rng.random() < 0.7:
+            put(lay, rng.choice("0012"), glyphs, rng, s, dy)
+        else:
+            put_any(lay, "\\infty", glyphs, rng, s, dy)
+        lay.tokens.append("}")
+        lay.x = max(right, lay.x) + rng.uniform(0.1, 0.3)
+    else:  # d/dx as a fraction
+        num, den = Layout(), Layout()
+        put(num, "d", glyphs, rng, 0.8)
+        put(den, "d", glyphs, rng, 0.8)
+        put(den, "x", glyphs, rng, 0.8)
+        width = max(num.x, den.x) + 0.15
+        lay.strokes.append(np.array([[x0, 0.6], [x0 + width, 0.6]], dtype=np.float32))
+        for part, top in ((num, -0.25), (den, 0.75)):
+            dx = x0 + (width - part.x) / 2
+            lay.strokes += [st + (dx, top) for st in part.strokes]
+        lay.tokens += ["\\frac", "{", "d", "}", "{", "d", "x", "}"]
+        lay.x = x0 + width + 0.2
+    put_term(lay, glyphs, rng, var)
+
+
 def calc_line(glyphs, rng):
     """A random calculator line: arithmetic, an equation, powers, fractions, brackets."""
     lay = Layout()
     var = rng.choice(["x", "x", "y", "a", "n", "t"])
     ops = ["+", "-", "\\times", "\\times", "\\cdot", "\\div", "/"]
-    if "\\int" in glyphs and "d" in glyphs and rng.random() < 0.15:
+    if "\\int" in glyphs and "d" in glyphs and rng.random() < 0.12:
         put_integral(lay, glyphs, rng, rng.choice(["x", "x", "t"]))
+        return lay
+    r = rng.random()
+    if r < 0.08 and "\\sum" in glyphs:
+        put_big_operator(lay, glyphs, rng, "sum")
+        return lay
+    if r < 0.15:
+        put_big_operator(lay, glyphs, rng, "lim")
+        return lay
+    if r < 0.21:
+        put_big_operator(lay, glyphs, rng, "ddx")
+        return lay
+    if r < 0.25:  # a prime: (x^3)' or y'
+        put(lay, "(", glyphs, rng)
+        put_power(lay, glyphs, rng, lambda: put(lay, "x", glyphs, rng))
+        put(lay, ")", glyphs, rng)
+        lay.tokens += ["^", "{", "\\prime", "}"]
+        lay.strokes.append(np.array([[lay.x, -0.2], [lay.x - 0.08, 0.15]], dtype=np.float32))
+        lay.x += 0.3
         return lay
 
     def operand():
