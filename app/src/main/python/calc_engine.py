@@ -48,6 +48,17 @@ FUNC_TOKENS = {
     "\\cos": "cos",
     "\\tan": "tan",
     "\\log": "log",
+    # symbols of the extended recogniser (model/finetune_mathwriting.py: EXTRA_VOCAB)
+    "\\ln": "log",
+    "\\cot": "cot",
+    "\\arcsin": "asin",
+    "\\arccos": "acos",
+    "\\arctan": "atan",
+    "\\sinh": "sinh",
+    "\\cosh": "cosh",
+    "\\tanh": "tanh",
+    "\\exp": "exp",
+    "\\det": "det",
 }
 INVERSE = {"sin": "asin", "cos": "acos", "tan": "atan", "cot": "acot"}
 # letter sequences written by hand that mean a function
@@ -78,16 +89,42 @@ GREEK = {
     "\\phi": "φ",
     "\\Delta": "Δ",
     "\\Pi": "Π",
+    "\\delta": "δ",
+    "\\epsilon": "ε",
+    "\\varepsilon": "ε",
+    "\\varphi": "φ",
+    "\\omega": "ω",
+    "\\rho": "ρ",
+    "\\tau": "τ",
+    "\\psi": "ψ",
+    "\\eta": "η",
+    "\\kappa": "κ",
+    "\\nu": "ν",
+    "\\xi": "ξ",
+    "\\zeta": "ζ",
+    "\\chi": "χ",
+    "\\Omega": "Ω",
+    "\\Sigma": "Σ",
+    "\\Phi": "Φ",
+    "\\Gamma": "Γ",
+    "\\Psi": "Ψ",
+    "\\Lambda": "Λ",
 }
-RELOPS = {"=": "=", "<": "<", ">": ">", "\\leq": "<=", "\\geq": ">=", "\\neq": "!="}
-BINOPS = {"+": "+", "-": "-", "\\times": "*", "\\cdot": "*", "\\div": "/", "/": "/"}
-UNSUPPORTED = {"\\exists", "\\forall", "\\in", "\\ldots", "\\cdots", "\\pm", "\\rightarrow"}
+RELOPS = {"=": "=", "<": "<", ">": ">", "\\leq": "<=", "\\geq": ">=", "\\neq": "!=",
+          "\\approx": "=", "\\equiv": "="}
+BINOPS = {"+": "+", "-": "-", "\\times": "*", "\\cdot": "*", "\\div": "/", "/": "/", ":": "/", "*": "*",
+          "\\wedge": "∧", "\\vee": "∨", "\\Rightarrow": ">>", "\\cup": "∪", "\\cap": "∩"}
+UNSUPPORTED = {"\\exists", "\\forall", "\\in", "\\ldots", "\\cdots", "\\pm", "\\rightarrow",
+               "\\notin", "\\subset", "\\subseteq", "\\supset", "\\supseteq", "\\emptyset", "\\perp",
+               "\\parallel", "\\angle", "\\Leftrightarrow", "\\mapsto", "\\sim", "\\simeq", "\\oint",
+               "\\mathbb", "\\circ"}
+MATRIX_ENVS = {"\\begin{matrix}", "\\begin{pmatrix}", "\\begin{bmatrix}"}
 OPEN = {"(": ")", "[": "]", "{": "}", "\\{": "\\}"}
 
 
 class TokenConverter:
     def __init__(self, tokens):
-        self.t = [tok for tok in tokens if tok not in ("\\limits", "\\prime")]
+        self.t = [tok for tok in tokens if tok not in ("\\limits", "\\prime", "\\hat", "\\dot", "\\vec")]
         self.i = 0
 
     # -- helpers -----------------------------------------------------------
@@ -204,9 +241,52 @@ class TokenConverter:
 
         while self.peek() is not None:
             tok = self.take()
-            if tok == "\\bmod":
+            if tok in ("\\bmod", "\\mod"):
                 emit(" mod ", "op")
                 continue
+            if tok in MATRIX_ENVS:
+                emit(self.matrix(tok), "value")
+                continue
+            if tok == "\\begin{cases}":
+                emit(self.cases(), "value")
+                continue
+            if tok in ("&", "\\\\") or tok.startswith("\\end{"):
+                continue
+            if tok == "\\%":
+                emit("%", "value")
+                continue
+            if tok == ";":
+                emit("; ", "op")
+                continue
+            if tok == "\\neg":
+                emit(" ~", "op")
+                continue
+            if tok == "\\nabla":
+                emit(self.nabla(), "value")
+                continue
+            if tok == "\\overline":
+                emit(" conjugate(%s)" % self.sub(self.group_tokens()), "value")
+                continue
+            if tok in ("\\lfloor", "\\lceil"):
+                close = "\\rfloor" if tok == "\\lfloor" else "\\rceil"
+                j = self.i
+                while j < len(self.t) and self.t[j] != close:
+                    j += 1
+                inner = self.sub(self.t[self.i:j])
+                self.i = j + 1
+                emit(" %s(%s)" % ("floor" if tok == "\\lfloor" else "ceiling", inner), "value")
+                continue
+            if tok in ("\\max", "\\min"):
+                emit(" " + tok[1:], "value")
+                continue
+            if tok == "\\prod":
+                emit(self.summation(product=True), "value")
+                continue
+            if tok in ("\\iint", "\\iiint"):
+                emit(self.integral(multiple=True), "value")
+                continue
+            if tok == "\\mid":
+                tok = "|"
 
             if tok.isdigit() or tok == ".":
                 num = tok
@@ -253,7 +333,11 @@ class TokenConverter:
                 else:
                     emit(" sqrt(%s)" % self.sub(self.group_tokens()), "value")
             elif tok == "^":
-                emit("^(%s)" % self.sub(self.group_tokens()), "value")
+                power = self.group_tokens()
+                if power == ["\\circ"]:
+                    emit("°", "value")  # 30^{\circ}: degrees
+                else:
+                    emit("^(%s)" % self.sub(power), "value")
             elif tok == "_":
                 # a subscript on something that is not a letter: ignore it
                 self.group_tokens()
@@ -284,6 +368,8 @@ class TokenConverter:
                 emit("!", "value")
             elif tok in BINOPS:
                 emit(" %s " % BINOPS[tok], "op")
+            elif tok == "\\partial":
+                raise CalcError("∂ пишется дробью: ∂f/∂x")
             elif tok in RELOPS:
                 emit(" %s " % RELOPS[tok], "op")
             elif tok == ",":
@@ -345,7 +431,99 @@ class TokenConverter:
             and den[0] == "d" and den[1].isalpha() and den[2] == "^"
         ):
             return " diff(%s, %s, %s)" % (self.operand(stop_at_func=False), den[1], num[3])
+        if num and num[0] == "\\partial" and den and den[0] == "\\partial":
+            return self.partial(num, den)
         return " ((%s)/(%s))" % (self.sub(num), self.sub(den))
+
+    def partial(self, num, den):
+        """∂f/∂x, ∂²f/∂x², ∂²f/∂x∂y, and ∂/∂x f."""
+        def power_at(toks, k):
+            """'^ 2' or '^ { 2 }' at toks[k]: (exponent, tokens used); (1, 0) when there is none."""
+            if toks[k:k + 1] != ["^"]:
+                return 1, 0
+            if toks[k + 1:k + 2] == ["{"] and k + 3 < len(toks) and toks[k + 2].isdigit() and toks[k + 3] == "}":
+                return int(toks[k + 2]), 4
+            if k + 1 < len(toks) and toks[k + 1].isdigit():
+                return int(toks[k + 1]), 2
+            return 1, 0
+
+        _, used = power_at(num, 1)
+        rest = num[1 + used:]
+        # variables in the denominator: ∂x ∂y, ∂x^2
+        vars_ = []
+        k = 0
+        while k < len(den):
+            if den[k] == "\\partial" and k + 1 < len(den):
+                v = den[k + 1]
+                times, used = power_at(den, k + 2)
+                vars_ += [v] * times
+                k += 2 + used
+            else:
+                k += 1
+        if not vars_:
+            raise CalcError("непонятная частная производная")
+        body = self.sub(rest) if rest else self.operand(stop_at_func=False)
+        return " diff(%s, %s)" % (body, ", ".join(vars_))
+
+    def nabla(self):
+        """∇f (gradient), ∇·F (divergence), ∇×F (curl), ∇²f (Laplacian)."""
+        if self.peek() == "^":
+            self.take()
+            self.group_tokens()
+            return " laplacian(%s)" % self.operand(stop_at_func=False)
+        if self.peek() in ("\\cdot", "\\times"):
+            kind = "div" if self.take() == "\\cdot" else "curl"
+            return " %s(%s)" % (kind, self.operand(stop_at_func=False))
+        return " grad(%s)" % self.operand(stop_at_func=False)
+
+    def matrix(self, begin):
+        end = begin.replace("begin", "end")
+        j = self.i
+        depth = 0
+        while j < len(self.t):
+            if self.t[j] in MATRIX_ENVS:
+                depth += 1
+            elif self.t[j] == end and depth == 0:
+                break
+            elif self.t[j].startswith("\\end{") and self.t[j] != end:
+                pass
+            elif self.t[j] == end:
+                depth -= 1
+            j += 1
+        inner = self.t[self.i:j]
+        self.i = j + 1
+        rows, row, cell = [], [], []
+        for tok in inner + ["\\\\"]:
+            if tok == "&":
+                row.append(cell)
+                cell = []
+            elif tok == "\\\\":
+                row.append(cell)
+                cell = []
+                if any(row_cell for row_cell in row):
+                    rows.append(row)
+                row = []
+            else:
+                cell.append(tok)
+        if not rows:
+            raise CalcError("пустая матрица")
+        return " [%s]" % ", ".join("[%s]" % ", ".join(self.sub(c) if c else "0" for c in r) for r in rows)
+
+    def cases(self):
+        j = self.i
+        while j < len(self.t) and self.t[j] != "\\end{cases}":
+            j += 1
+        inner = self.t[self.i:j]
+        self.i = j + 1
+        parts, cur = [], []
+        for tok in inner + ["\\\\"]:
+            if tok == "\\\\":
+                if cur:
+                    parts.append(self.sub([t for t in cur if t != "&"]))
+                cur = []
+            else:
+                cur.append(tok)
+        return "; ".join(parts)
 
     def limits(self):
         lo = hi = None
@@ -358,8 +536,31 @@ class TokenConverter:
                 hi = self.group_tokens()
         return lo, hi
 
-    def integral(self):
+    def integral(self, multiple=False):
         lo, hi = self.limits()
+        if multiple:
+            # ∬ f dx dy: every differential at the end; limits (rare by hand) are not supported here
+            j = len(self.t)
+            k = self.i
+            depth = 0
+            while k < len(self.t):
+                if self.t[k] in OPEN:
+                    depth += 1
+                elif self.t[k] in OPEN.values():
+                    depth -= 1
+                elif depth == 0 and (self.t[k] in RELOPS or self.t[k] == ","):
+                    j = k
+                    break
+                k += 1
+            seg = self.t[self.i:j]
+            diffs = []
+            while len(seg) >= 2 and seg[-2] == "d" and len(seg[-1]) == 1 and seg[-1].isalpha():
+                diffs.insert(0, seg[-1])
+                seg = seg[:-2]
+            self.i = j
+            if not diffs:
+                raise CalcError("у кратного интеграла нужны dx dy")
+            return " integrate(%s, %s)" % (self.sub(seg) if seg else "1", ", ".join(diffs))
         # find the differential "d x" at depth 0
         j = self.i
         depth = 0
@@ -391,17 +592,18 @@ class TokenConverter:
             return " integrate(%s, (%s, %s, %s))" % (body_text, var, self.sub(lo), self.sub(hi))
         return " integrate(%s, %s)" % (body_text, var)
 
-    def summation(self):
+    def summation(self, product=False):
         lo, hi = self.limits()
         if lo is None or hi is None:
-            raise CalcError("у суммы нужны пределы")
+            raise CalcError("у произведения нужны пределы" if product else "у суммы нужны пределы")
         if "=" in lo:
             k = lo.index("=")
             var, start = lo[:k], lo[k + 1:]
         else:
             var, start = ["n"], ["1"]
         body = self.operand(stop_at_func=False)
-        return " summation(%s, (%s, %s, %s))" % (body, self.sub(var), self.sub(start), self.sub(hi))
+        return " %s(%s, (%s, %s, %s))" % ("product" if product else "summation", body, self.sub(var), self.sub(start),
+                                           self.sub(hi))
 
     def limit(self):
         lo, _ = self.limits()
@@ -494,7 +696,9 @@ def rewrite_words(toks):
 def tokens_to_text(tokens):
     if isinstance(tokens, str):
         tokens = tokens.split()
-    return TokenConverter(rewrite_primes(rewrite_words(list(tokens)))).convert()
+    text = TokenConverter(rewrite_primes(rewrite_words(list(tokens)))).convert()
+    # x ≡ 3 (mod 7): the modulus in brackets
+    return re.sub(r"\(\s*mod\s+([^()]+?)\s*\)", r"mod \1", text)
 
 
 # ---------------------------------------------------------------------------
@@ -2659,6 +2863,8 @@ def _valid(text):
             return False
     if depth:
         return False
+    if ";" in text:  # a system from \begin{cases}
+        return all(_valid(part) for part in text.split(";") if part.strip())
     pieces, _ = split_relation(re.sub(r"\bmod\b", "%", text))
     for p in pieces:
         if p.strip():
@@ -2680,6 +2886,8 @@ def evaluate_line(candidates, forced=False):
             text = tokens_to_text(toks)
             if not _valid(text):
                 raise CalcError("не удалось разобрать: %s" % text)
+            if ";" in text:  # \begin{cases}: answered as a system by evaluate_item
+                return text, answer("none")
             res = process(text, forced=forced)
         except CalcError as ex:
             if first_error is None:
@@ -2748,6 +2956,10 @@ def evaluate_item(item):
             text, res = evaluate_line(_line_candidates({"tokens": item["tokens"], "alts": item.get("alts")}),
                                       forced=item.get("forced", False))
             out["input"] = text
+            if ";" in text:  # a system written with \begin{cases}
+                parts = statements(text)
+                out["input_tex"] = system_tex(parts)
+                return _drawn_or(parts, lambda: answer("system", process_system(parts), sep="\n"))
             if text.strip():
                 res = _drawn_or([text], lambda: res)
             out["input_tex"] = text_to_tex(text) if "error" not in res else None

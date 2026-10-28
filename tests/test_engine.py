@@ -341,6 +341,29 @@ def test_higher():
     assert ans("y' = sin(x*y); y(0)=1").startswith("формулы нет, численно")
 
 
+def test_new_symbols():
+    """Tokens of the extended recogniser vocabulary (model/finetune_mathwriting.py: EXTRA_VOCAB)."""
+    cases = {
+        r"\sin 3 0 ^ { \circ } =": "sin(30°) =",
+        r"1 5 \% \times 2 0 0 =": "15% * 200 =",
+        r"\frac { \partial ^ { 2 } } { \partial x ^ { 2 } } x ^ { 3 } =": "diff(x^(3), x, x) =",
+        r"\frac { \partial ^ { 2 } f } { \partial x \partial y }": "diff(f, x, y)",
+        r"\nabla ( x ^ { 2 } + y ^ { 2 } ) =": "grad(( x^(2) + y^(2))) =",
+        r"\det \begin{bmatrix} 1 & 2 \\ 3 & 4 \end{bmatrix} =": "det([[1, 2], [3, 4]]) =",
+        r"\begin{cases} x + y = 3 \\ x - y = 1 \end{cases}": "x + y = 3; x - y = 1",
+        r"3 x \equiv 4 ( \mod 7 )": "3 x = 4 mod 7",
+        r"\iint x y d x d y =": "integrate(x y, x, y) =",
+        r"\prod _ { k = 1 } ^ { 5 } k =": "product(k, (k, 1, 5)) =",
+        r"8 : 2 =": "8 / 2 =",
+    }
+    for toks, expected in cases.items():
+        got = ce.tokens_to_text(toks.split())
+        assert got == expected, (toks, got, expected)
+    r = json.loads(ce.evaluate_document(json.dumps([{"id": "a", "type": "line",
+                                                     "tokens": cases and r"\begin{cases} x + y = 3 \\ x - y = 1 \end{cases}".split()}])))[0]
+    assert r["answer"] == "x = 2, y = 1", r
+
+
 def test_plot():
     data = json.loads(ce.plot_points("y = 1/x", -1.0, 1.0, 5))
     assert data["ys"][2] is None and data["ys"][0] == -1.0, data

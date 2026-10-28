@@ -28,12 +28,28 @@ OUT = os.path.abspath(sys.argv[2])
 N_EVAL = int(sys.argv[3]) if len(sys.argv) > 3 else 300
 sys.path.insert(0, COMER)
 
-from comer.datamodule import vocab  # noqa: E402
-from comer.model.comer import CoMER  # noqa: E402
-
 # COMER_CKPT: a fine-tuned checkpoint (model/finetune_mathwriting.py); default: the published CROHME one
 CKPT = os.environ.get("COMER_CKPT") or os.path.join(
     COMER, "lightning_logs/version_0/checkpoints/epoch=151-step=57151-val_ExpRate=0.6365.ckpt")
+
+
+def _use_checkpoint_vocab():
+    """A fine-tuned checkpoint may know more symbols than CROHME (its meta lists them): CoMER builds its
+    vocabulary from dictionary.txt at import time, so the file is rewritten before the import."""
+    meta = torch.load(CKPT, map_location="cpu", weights_only=False).get("meta") or {}
+    words = meta.get("vocab")
+    if not words:
+        return
+    path = os.path.join(COMER, "comer", "datamodule", "dictionary.txt")
+    with open(path, "w") as f:
+        f.write("\n".join(w for w in words if w not in ("<pad>", "<sos>", "<eos>")) + "\n")
+    print("vocabulary from the checkpoint:", len(words), "tokens")
+
+
+_use_checkpoint_vocab()
+
+from comer.datamodule import vocab  # noqa: E402
+from comer.model.comer import CoMER  # noqa: E402
 
 
 def load_model():

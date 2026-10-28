@@ -69,6 +69,39 @@ LR = float(os.environ.get("LR") or (1e-4 if os.environ.get("INIT_CKPT") else 2e-
 WARMUP = 20 if SMOKE else 1000
 
 sys.path.insert(0, COMER_DIR)
+
+# Symbols the calculator needs beyond CROHME's ~110 (EXTEND_VOCAB=0 keeps the CROHME set).
+# CoMER reads its vocabulary from dictionary.txt at import time, so the file is extended first;
+# load_model() grows the embedding and output layers to match.
+EXTRA_VOCAB = [
+    "D", "J", "K", "O", "Q", "U", "W", "Z",
+    "\\partial", "\\nabla", "\\circ", "\\%", "\\approx", "\\equiv", "\\sim", "\\simeq",
+    "\\cup", "\\cap", "\\subset", "\\subseteq", "\\supset", "\\supseteq", "\\notin", "\\emptyset",
+    "\\neg", "\\wedge", "\\vee", "\\Rightarrow", "\\Leftrightarrow", "\\mapsto",
+    "\\iint", "\\iiint", "\\oint", "\\vec", "\\overline", "\\hat", "\\dot", "\\mathbb",
+    "\\delta", "\\epsilon", "\\varepsilon", "\\varphi", "\\omega", "\\rho", "\\tau", "\\psi",
+    "\\eta", "\\kappa", "\\nu", "\\xi", "\\zeta", "\\chi", "\\Omega", "\\Sigma", "\\Phi",
+    "\\Gamma", "\\Psi", "\\Lambda", "\\perp", "\\parallel", "\\angle", "\\mid", "\\prod",
+    "\\ln", "\\cot", "\\arcsin", "\\arccos", "\\arctan", "\\sinh", "\\cosh", "\\tanh", "\\exp",
+    "\\max", "\\min", "\\det", "\\mod", "\\lfloor", "\\rfloor", "\\lceil", "\\rceil",
+    "&", "\\\\", "\\begin{matrix}", "\\end{matrix}", "\\begin{pmatrix}", "\\end{pmatrix}",
+    "\\begin{bmatrix}", "\\end{bmatrix}", "\\begin{cases}", "\\end{cases}", ";", ":", "*",
+]
+
+
+def _extend_dictionary():
+    if os.environ.get("EXTEND_VOCAB", "1") == "0":
+        return
+    path = os.path.join(COMER_DIR, "comer", "datamodule", "dictionary.txt")
+    with open(path) as f:
+        words = [w.strip() for w in f if w.strip()]
+    add = [w for w in EXTRA_VOCAB if w not in words]
+    if add:
+        with open(path, "a") as f:
+            f.write("".join(w + "\n" for w in add))
+
+
+_extend_dictionary()
 from comer.datamodule import vocab  # noqa: E402
 from comer.model.comer import CoMER  # noqa: E402
 from comer.utils.utils import ce_loss, to_bi_tgt_out  # noqa: E402
@@ -163,9 +196,16 @@ def size_estimate(strokes, target=45.0):
 # ---------------------------------------------------------------------------
 
 CMD_MAP = {"\\le": "\\leq", "\\ge": "\\geq", "\\ne": "\\neq", "\\to": "\\rightarrow", "\\lt": "<", "\\gt": ">",
-           "\\dots": "\\ldots", "\\longrightarrow": "\\rightarrow", "\\lbrace": "\\{", "\\rbrace": "\\}"}
+           "\\dots": "\\ldots", "\\longrightarrow": "\\rightarrow", "\\lbrace": "\\{", "\\rbrace": "\\}",
+           "\\iff": "\\Leftrightarrow", "\\implies": "\\Rightarrow", "\\land": "\\wedge", "\\lor": "\\vee",
+           "\\lnot": "\\neg", "\\varnothing": "\\emptyset", "\\degree": "\\circ", "\\vert": "|",
+           "\\lvert": "|", "\\rvert": "|", "\\colon": ":", "\\ast": "*", "\\bmod": "\\mod", "\\pmod": "\\mod"}
 SKIP = {"\\,", "\\;", "\\!", "\\ ", "\\quad", "\\qquad", "\\left", "\\right", "\\displaystyle"}
-FUNC_WORDS = [("sin", "\\sin"), ("cos", "\\cos"), ("tan", "\\tan"), ("log", "\\log"), ("lim", "\\lim")]
+FUNC_WORDS = [(w, c) for w, c in [
+    ("arcsin", "\\arcsin"), ("arccos", "\\arccos"), ("arctan", "\\arctan"), ("sinh", "\\sinh"), ("cosh", "\\cosh"),
+    ("tanh", "\\tanh"), ("sin", "\\sin"), ("cos", "\\cos"), ("tan", "\\tan"), ("cot", "\\cot"), ("log", "\\log"),
+    ("lim", "\\lim"), ("ln", "\\ln"), ("exp", "\\exp"), ("max", "\\max"), ("min", "\\min"), ("det", "\\det"),
+    ("mod", "\\mod")] if c in VOCAB]
 
 
 def tokenize_latex(s):
@@ -177,6 +217,11 @@ def tokenize_latex(s):
             i += 1
             continue
         if c == "\\":
+            env = re.match(r"\\(begin|end)\{([a-z]+)\*?\}", s[i:])
+            if env:
+                toks.append("\\%s{%s}" % (env.group(1), env.group(2)))
+                i += len(env.group(0))
+                continue
             m = re.match(r"\\([A-Za-z]+|.)", s[i:])
             t = m.group(0)
             i += len(t)
@@ -292,9 +337,15 @@ SHORT = set("acemnorsuvwxz")
 DESC = set("gpqy")
 BOXES = {"d": (0.0, 1.0), ".": (0.86, 1.0), "\\cdot": (0.53, 0.67), "+": (0.25, 0.9), "\\times": (0.32, 0.88), "\\div": (0.25, 0.92), "<": (0.3, 0.9), ">": (0.3, 0.9),
          "(": (-0.12, 1.15), ")": (-0.12, 1.15), "/": (-0.05, 1.08)}
-FLAT = {"-": 0.6, "=": 0.6}  # centre height of flat glyphs
+FLAT = {"-": 0.6, "=": 0.6, "\\approx": 0.6, "\\equiv": 0.6, "\\Rightarrow": 0.6, "\\neg": 0.55}  # centre heights
+BOXES.update({"\\partial": (0.0, 1.0), "\\nabla": (0.0, 1.0), "\\%": (0.0, 1.0), "\\cup": (0.35, 0.95),
+              "\\cap": (0.35, 0.95), "\\in": (0.3, 0.95), "\\wedge": (0.35, 0.95), "\\vee": (0.35, 0.95),
+              ":": (0.35, 0.9), "*": (0.2, 0.6)})
+# symbols of the extended vocabulary used in generated lines (when the data has handwritten glyphs of them)
+NEW_GLYPHS = {"\\partial", "\\nabla", "\\%", "\\approx", "\\equiv", "\\cup", "\\cap", "\\in", "\\wedge",
+              "\\vee", "\\neg", "\\Rightarrow", "A", "B", "p", "q", "f", "y", ":"}
 CALC_GLYPHS = set("0123456789xyabcdlimnt+-=()/<>.") | {"\\times", "\\div", "\\cdot", "\\int", "\\sum",
-                                                       "\\infty", "\\rightarrow"}
+                                                       "\\infty", "\\rightarrow"} | NEW_GLYPHS
 
 
 class Layout:
@@ -556,9 +607,89 @@ def put_big_operator(lay, glyphs, rng, kind):
     put_term(lay, glyphs, rng, var)
 
 
+def _ring(lay, scale, rng):
+    """A small raised circle: the degree sign (30°)."""
+    r = rng.uniform(0.09, 0.14) * scale
+    a = np.linspace(0, 2 * math.pi, 14)
+    cx, cy = lay.x + r, -0.05 * scale + r
+    lay.strokes.append(np.stack([cx + r * np.cos(a), cy + r * np.sin(a) * rng.uniform(0.85, 1.15)], 1).astype(np.float32))
+    lay.x += 2 * r + rng.uniform(0.12, 0.25) * scale
+
+
+def new_symbol_line(lay, glyphs, rng):
+    """Lines with the symbols of the extended vocabulary: 30°, 15%, ≈, ≡, ∂f/∂x, ∇f, A ∪ B, p ∧ ¬q, p ⇒ q."""
+    kinds = []
+    if "\\circ" in VOCAB:
+        kinds.append("deg")
+    for k, need in (("pct", "\\%"), ("approx", "\\approx"), ("equiv", "\\equiv"), ("partial", "\\partial"),
+                    ("nabla", "\\nabla"), ("set", "\\cup"), ("logic", "\\wedge"), ("ratio", ":")):
+        if need in glyphs and need in VOCAB:
+            kinds.append(k)
+    if not kinds:
+        raise KeyError("no new glyphs")
+    kind = rng.choice(kinds)
+    if kind == "deg":
+        put_number(lay, glyphs, rng, decimal_p=0)
+        _ring(lay, 1.0, rng)
+        lay.tokens += ["^", "{", "\\circ", "}"]
+    elif kind == "pct":
+        put_number(lay, glyphs, rng)
+        put(lay, "\\%", glyphs, rng)
+        if rng.random() < 0.5:
+            put(lay, rng.choice(["\\times", "\\cdot"]), glyphs, rng)
+            put_number(lay, glyphs, rng, decimal_p=0)
+    elif kind in ("approx", "equiv"):
+        put(lay, rng.choice(["x", "a", "n"]), glyphs, rng)
+        put(lay, "\\approx" if kind == "approx" else "\\equiv", glyphs, rng)
+        put_number(lay, glyphs, rng)
+    elif kind == "partial":
+        # ∂f/∂x as a fraction: numerator ∂ f, bar, denominator ∂ x
+        sub = Layout()
+        put(sub, "\\partial", glyphs, rng, scale=0.8)
+        put(sub, rng.choice(["f", "y"] if "f" in glyphs else ["y"]), glyphs, rng, scale=0.8)
+        den = Layout()
+        put(den, "\\partial", glyphs, rng, scale=0.8)
+        put(den, rng.choice(["x", "y"]), glyphs, rng, scale=0.8)
+        w = max(sub.x, den.x) + 0.1
+        x0 = lay.x
+        for st in sub.strokes:
+            lay.strokes.append(st + np.array([x0 + (w - sub.x) / 2, -0.75], dtype=np.float32))
+        lay.strokes.append(np.array([[x0, 0.55], [x0 + w, 0.55 + rng.uniform(-0.03, 0.03)]], dtype=np.float32))
+        for st in den.strokes:
+            lay.strokes.append(st + np.array([x0 + (w - den.x) / 2, 0.75], dtype=np.float32))
+        lay.tokens += ["\\frac", "{"] + sub.tokens + ["}", "{"] + den.tokens + ["}"]
+        lay.x = x0 + w + 0.2
+    elif kind == "nabla":
+        put(lay, "\\nabla", glyphs, rng)
+        put(lay, "f" if "f" in glyphs else "y", glyphs, rng)
+    elif kind == "set":
+        put(lay, "A" if "A" in glyphs else "x", glyphs, rng)
+        put(lay, rng.choice([t for t in ("\\cup", "\\cap", "\\in") if t in glyphs]), glyphs, rng)
+        put(lay, "B" if "B" in glyphs else "y", glyphs, rng)
+    elif kind == "logic":
+        a, b = ("p", "q") if "p" in glyphs and "q" in glyphs else ("x", "y")
+        put(lay, a, glyphs, rng)
+        put(lay, rng.choice([t for t in ("\\wedge", "\\vee", "\\Rightarrow") if t in glyphs]), glyphs, rng)
+        if "\\neg" in glyphs and rng.random() < 0.4:
+            put(lay, "\\neg", glyphs, rng)
+        put(lay, b, glyphs, rng)
+    else:  # ratio: 8 : 2 (division as written at school)
+        put_number(lay, glyphs, rng, decimal_p=0)
+        put(lay, ":", glyphs, rng)
+        put_number(lay, glyphs, rng, decimal_p=0)
+    if kind in ("deg", "pct", "ratio") and rng.random() < 0.5:
+        put(lay, "=", glyphs, rng)
+    return lay
+
+
 def calc_line(glyphs, rng):
     """A random calculator line: arithmetic, an equation, powers, fractions, brackets."""
     lay = Layout()
+    if rng.random() < 0.15:
+        try:
+            return new_symbol_line(lay, glyphs, rng)
+        except KeyError:
+            lay = Layout()
     var = rng.choice(["x", "x", "y", "a", "n", "t"])
     ops = ["+", "-", "\\times", "\\times", "\\cdot", "\\div", "/"]
     if "\\int" in glyphs and "d" in glyphs and rng.random() < 0.12:
@@ -757,11 +888,32 @@ def load_model(path):
     model = CoMER(**{k: hp[k] for k in ("d_model", "growth_rate", "num_layers", "nhead", "num_decoder_layers",
                                         "dim_feedforward", "dropout", "dc", "cross_coverage", "self_coverage")})
     sd = {k[len("comer_model."):]: v for k, v in ckpt["state_dict"].items() if k.startswith("comer_model.")}
+    own = model.state_dict()
+    old_words = (ckpt.get("meta") or {}).get("vocab")
+    for key, v in list(sd.items()):
+        if key in own and own[key].shape != v.shape and v.dim() >= 1 and v.shape[1:] == own[key].shape[1:]:
+            # the vocabulary grew: keep every known token's row (by word, in case the order changed),
+            # start new tokens from the average embedding and a low output bias (rarely predicted at first)
+            new = own[key].clone()
+            if key.endswith("bias"):
+                new.fill_(float(v.min()))
+            else:
+                mean, std = v.float().mean(0), v.float().std(0)
+                new.copy_(mean + torch.randn_like(new) * std * 0.1)
+            if old_words:
+                for i, w in enumerate(old_words):
+                    if w in vocab.word2idx and i < v.shape[0]:
+                        new[vocab.word2idx[w]] = v[i]
+            else:
+                new[: v.shape[0]] = v
+            sd[key] = new
+            log("grew %s from %d to %d tokens" % (key, v.shape[0], new.shape[0]))
     model.load_state_dict(sd)
     return model, hp
 
 
 def save_model(model, hp, path, meta):
+    meta = dict(meta, vocab=[vocab.idx2word[i] for i in range(len(vocab))])
     sd = {"comer_model." + k: v.detach().cpu() for k, v in model.state_dict().items()}
     torch.save({"hyper_parameters": hp, "state_dict": sd, "meta": meta}, path)
 
