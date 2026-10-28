@@ -713,6 +713,74 @@ def _extrema(f, x=None):
     return Answer(line)
 
 
+def _study(f, x=None):
+    """Investigate a function of one variable: domain, zeros, extrema, monotonicity, asymptotes."""
+    f = sp.sympify(f)
+    x = x if x is not None else (sorted(f.free_symbols, key=str) or [sp.Symbol("x")])[0]
+    lines = []
+    from sympy.calculus.util import continuous_domain
+    dom = continuous_domain(f, x, sp.S.Reals)
+    lines.append([W("область определения: "), X(dom) if dom != sp.S.Reals else ("ℝ", r"\mathbb{R}")])
+    zeros = sp.solveset(f, x, dom)
+    if isinstance(zeros, sp.FiniteSet):
+        lines.append([W("нули: ")] + ([X(sorted(zeros, key=lambda q: float(sp.N(q))))] if zeros else [W("нет")]))
+    d = sp.simplify(sp.diff(f, x))
+    crit = sp.solveset(d, x, dom)
+    sing = sp.solveset(1 / sp.simplify(f), x, sp.S.Reals) if not dom == sp.S.Reals else sp.S.EmptySet
+    if isinstance(crit, sp.FiniteSet) and (isinstance(sing, sp.FiniteSet) or sing is sp.S.EmptySet):
+        cut = sorted(set(crit) | set(sing), key=lambda q: float(sp.N(q)))
+        bounds = [-sp.oo] + cut + [sp.oo]
+        up, down = [], []
+        for a, b in zip(bounds, bounds[1:]):
+            mid = (a + b) / 2 if a.is_finite and b.is_finite else (b - 1 if a == -sp.oo and b.is_finite else a + 1 if b == sp.oo and a.is_finite else 0)
+            if mid not in dom:
+                continue
+            sign = d.subs(x, mid)
+            (up if sign.is_positive else down if sign.is_negative else []).append(sp.Interval.open(a, b))
+        if up:
+            lines.append([W("возрастает на "), X(sp.Union(*up))])
+        if down:
+            lines.append([W("убывает на "), X(sp.Union(*down))])
+        ext = _extrema(f, x).line
+        lines.append([W("экстремумы: ")] + ext)
+    vert = [p for p in (sing if isinstance(sing, sp.FiniteSet) else [])
+            if sp.limit(f, x, p, "+").is_infinite or sp.limit(f, x, p, "-").is_infinite]
+    if vert:
+        lines.append([W("вертикальные асимптоты: ")] + sum(([X(x), O("="), X(p), (";  ", r";\ ")] for p in vert), [])[:-1])
+    found = {}
+    for side, inf in (("+∞", sp.oo), ("−∞", -sp.oo)):
+        try:
+            k = sp.limit(f / x, x, inf)
+            if k.is_finite:
+                b = sp.limit(f - k * x, x, inf)
+                if b.is_finite:
+                    found.setdefault(sp.simplify(k * x + b), []).append(side)
+        except Exception:  # noqa: BLE001
+            pass
+    for line, sides in found.items():
+        where = "x → ±∞" if len(sides) == 2 else "x → " + sides[0]
+        lines.append([W("асимптота при %s: " % where), ("y", "y"), O("="), X(line)])
+    return MultiAnswer(lines)
+
+
+class MultiAnswer:
+    """Several answer lines returned by one function (shown one under another)."""
+
+    def __init__(self, lines):
+        self.lines = lines
+
+
+def _lsolve(a, b):
+    """A·X = B, like MathCad's lsolve."""
+    a, b = _matrix(a), _matrix(b)
+    if b.shape[0] != a.shape[0] and b.shape[1] == a.shape[0]:
+        b = b.T
+    sol, params = a.gauss_jordan_solve(b)
+    if params.shape[0]:
+        sol = sol.subs({p: sp.Symbol("t%d" % (k + 1)) for k, p in enumerate(params)})
+    return sol.T
+
+
 def _local_dict():
     d = {}
     for ch in "abcdfghjklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ":
@@ -750,12 +818,37 @@ def _local_dict():
         "taylor": _taylor,
         "max": _maxmin(sp.Max, __import__("sympy.calculus.util", fromlist=["maximum"]).maximum),
         "min": _maxmin(sp.Min, __import__("sympy.calculus.util", fromlist=["minimum"]).minimum),
-        "extrema": _extrema, "extremum": _extrema,
+        "extrema": _extrema, "extremum": _extrema, "study": _study, "investigate": _study,
+        "lsolve": _lsolve,
     })
     return d
 
 
 LOCALS = _local_dict()
+
+
+def _wrap_matrices(s):
+    """[[1,2],[3,4]] -> Matrix([[1,2],[3,4]]) unless the brackets are an argument of Matrix(...) already."""
+    out, i, closers = [], 0, []
+    depth = 0
+    while i < len(s):
+        c = s[i]
+        if c == "[":
+            if s.startswith("[[", i) and not re.search(r"Matrix\(\s*$", s[:i]):
+                out.append("Matrix(")
+                closers.append(depth)
+            depth += 1
+        elif c == "]":
+            depth -= 1
+            out.append(c)
+            if closers and closers[-1] == depth:
+                closers.pop()
+                out.append(")")
+            i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def normalize_text(text):
@@ -785,8 +878,7 @@ def normalize_text(text):
     s = s.replace("√", "sqrt")
     s = re.sub(r"\|([^|]+)\|", r"Abs(\1)", s)
     # matrices: [[1,2],[3,4]] -> Matrix([[1,2],[3,4]])
-    s = re.sub(r"(?<![A-Za-z(])\[\[", "Matrix([[", s)
-    s = re.sub(r"\]\](?!\))", "]])", s)
+    s = _wrap_matrices(s)
     s = s.replace(",", ", ")
     return s
 
@@ -1186,6 +1278,8 @@ def fmt(e):
         return " или ".join(fmt(a) for a in _ordered(e.args))
     if isinstance(e, sp.Interval):
         return "%s%s; %s%s" % ("(" if e.left_open else "[", fmt(e.start), fmt(e.end), ")" if e.right_open else "]")
+    if isinstance(e, sp.Union):
+        return " ∪ ".join(fmt(a) for a in e.args)
     if isinstance(e, sp.Integral):
         return "∫" + fmt(e.function) + " d" + ",".join(fmt(v) for v in e.variables)
     if isinstance(e, sp.Derivative):
@@ -1872,6 +1966,8 @@ def evaluate_trailing(lhs_text, forced):
         return too_big_line(big.log10), None
     if isinstance(raw, Answer):
         return raw.line, None
+    if isinstance(raw, MultiAnswer):
+        return raw, None
     if isinstance(raw, (int, float)) and not isinstance(raw, bool):
         raw = sp.sympify(raw)
     if isinstance(raw, (list, tuple, dict, bool)):
@@ -1973,6 +2069,8 @@ def process(text, forced=False):
     if not ops:
         if forced:
             line, plot = evaluate_trailing(text, True)
+            if isinstance(line, MultiAnswer):
+                return answer("system", line.lines, sep="\n")
             return answer("value", [line] if line else None, plot)
         return answer("none")
     if len(ops) > 1:
@@ -1985,6 +2083,8 @@ def process(text, forced=False):
         if op != "=":
             return answer("none")
         line, plot = evaluate_trailing(lhs_text, forced)
+        if isinstance(line, MultiAnswer):
+            return answer("system", line.lines, sep="\n")
         return answer("value" if line else "none", [line] if line else None, plot)
 
     decimal = has_float(text)
@@ -2047,6 +2147,23 @@ def process_mod(text, forced):
             return answer("none")
         val = sp.simplify(parse(expr_text))
         return answer("value", [value_line(val)])
+    sol = congruence_roots(pieces)
+    if sol is True or sol is False:
+        return answer("check", [[("✓" if sol else "✗", "")]])
+    v, roots, n = sol
+    if not roots:
+        return answer("solve", [[W("нет решений")]])
+    return answer("solve", [_congruence_line(v, roots, n)])
+
+
+def _congruence_line(v, roots, n):
+    shown = roots[:12]
+    vals = ", ".join(str(r) for r in shown) + (", …" if len(roots) > len(shown) else "")
+    return [X(v), (" ≡ " + vals + " (mod %d)" % n, r" \equiv " + vals + r"\ (\operatorname{mod}\ %d)" % n)]
+
+
+def congruence_roots(pieces):
+    """'3x = 4 mod 7' split at '=' -> (x, [6], 7); True/False when there is no variable."""
     sides = [p.strip() for p in pieces]
     mod_side = next((k for k in (1, 0) if re.search(r"\bmod\b", sides[k])), None)
     m = re.match(r"(.*)\bmod\b\s*\(?\s*(\d+)\s*\)?\s*$", sides[mod_side])
@@ -2060,11 +2177,8 @@ def process_mod(text, forced):
     syms = order_vars(diff.free_symbols)
     if len(syms) > 1:
         raise CalcError("сравнение по модулю решается для одной переменной")
-    n_tex = r"\ (\operatorname{mod}\ %d)" % n
-    n_txt = " (mod %d)" % n
     if not syms:
-        ok = diff.is_Integer and int(diff) % n == 0
-        return answer("check", [[("✓" if ok else "✗", "")]])
+        return bool(diff.is_Integer and int(diff) % n == 0)
     if n > 1_000_000:
         raise CalcError("модуль слишком большой")
     v = syms[0]
@@ -2079,11 +2193,39 @@ def process_mod(text, forced):
             acc = (acc * r + c) % n
         if acc == 0:
             roots.append(r)
-    if not roots:
-        return answer("solve", [[W("нет решений") ]])
-    shown = roots[:12]
-    vals = ", ".join(str(r) for r in shown) + (", …" if len(roots) > len(shown) else "")
-    return answer("solve", [[X(v), (" ≡ " + vals + n_txt, r" \equiv " + vals + n_tex)]])
+    return v, roots, n
+
+
+def process_congruences(texts):
+    """x = 2 mod 3; x = 3 mod 5 -> x ≡ 8 (mod 15) (Chinese remainder theorem). None if not such a system."""
+    if not all(re.search(r"\bmod\b", t) for t in texts):
+        return None
+    from itertools import product
+    from sympy.ntheory.modular import solve_congruence
+    parts = []
+    for t in texts:
+        pieces, ops = split_relation(t)
+        if ops != ["="]:
+            return None
+        sol = congruence_roots(pieces)
+        if sol is True:
+            continue
+        if sol is False or not sol[1]:
+            return [[W("нет решений")]]
+        parts.append(sol)
+    if not parts:
+        return [[("✓", "")]]
+    if len({str(p[0]) for p in parts}) != 1:
+        raise CalcError("в системе сравнений должна быть одна переменная")
+    found, modulus = set(), None
+    for combo in product(*[[(r, p[2]) for r in p[1]] for p in parts][:8]):
+        res = solve_congruence(*combo)
+        if res:
+            found.add(int(res[0]))
+            modulus = int(res[1])
+    if not found:
+        return [[W("нет решений")]]
+    return [_congruence_line(parts[0][0], sorted(found), modulus)]
 
 
 IC_RE = re.compile(r"^\s*y\s*((?:'|′)*)\s*\(\s*([^()]+?)\s*\)\s*=\s*(.+?)\s*$")
@@ -2123,6 +2265,9 @@ def process_system(texts):
     ivp = process_ivp(texts)
     if ivp is not None:
         return ivp
+    crt = process_congruences(texts)
+    if crt is not None:
+        return crt
     eqs = []
     for t in texts:
         pieces, ops = split_relation(t)

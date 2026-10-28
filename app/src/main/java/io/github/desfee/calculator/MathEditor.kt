@@ -169,7 +169,7 @@ class MathEditor(context: Context, private val colors: Palette, private val list
             listOf(Key("i", "i"), Key("°", "°"), Key("%", "%"), Key("C(n,k)", "C(|, )"), Key("A(n,k)", "A(|, )"), Key("n!", "!")),
             listOf(Key("на множ.", "factorint(|)"), Key("простое?", "isprime(|)"), Key("делители", "divisors(|)"), Key("НОД", "gcd(|, )"), Key("НОК", "lcm(|, )"), Key("в 2-ю", "bin(|)")),
             listOf(Key("среднее", "mean(|)"), Key("медиана", "median(|)"), Key("σ", "std(|)"), Key("λ матр.", "eigenvals(|)"), Key("ранг", "rank(|)"), Key("экстр.", "extrema(|)")),
-            listOf(Key("max", "max(|, x, 0, 1)"), Key("min", "min(|, x, 0, 1)"), Key("Тейлор", "taylor(|, x, 0, 6)"), left, right, back),
+            listOf(Key("max", "max(|, x, 0, 1)"), Key("min", "min(|, x, 0, 1)"), Key("Тейлор", "taylor(|, x, 0, 6)"), Key("исслед.", "study(|)"), Key("A·X=B", "lsolve([[|, 0], [0, 1]], [1, 1])"), back),
         ))
         showPage("123")
     }
