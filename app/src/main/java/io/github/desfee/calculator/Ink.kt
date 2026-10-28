@@ -90,6 +90,7 @@ object Segmenter {
 
         var bands = splitBands(rest, h)
         bands = mergeFractions(bands, h)
+        bands = attachSmallGroups(bands, h)
 
         val systems = mutableListOf<InkSystem>()
         val bandLists = bands.map { it.toMutableList() }.toMutableList()
@@ -97,14 +98,14 @@ object Segmenter {
         for (c in candidates.sortedBy { it.bounds.left }) {
             // a line belongs to the brace when its middle (ignoring descenders and exponents)
             // lies within the brace's height and it starts to the right of the brace
-            val margin = 0.35f * h
+            val margin = 0.6f * h
             fun inside(i: Int): Boolean {
                 val band = bandLists[i]
                 if (i in usedInSystem || band.isEmpty()) return false
                 val cy = coreCenter(band)
                 return cy >= c.bounds.top - margin && cy <= c.bounds.bottom + margin &&
-                    band.maxOf { it.bounds.right } - band.minOf { it.bounds.left } > 1.2f * h &&
-                    c.bounds.right <= band.minOf { it.bounds.left } + 0.5f * h
+                    band.maxOf { it.bounds.right } - band.minOf { it.bounds.left } > 1.0f * h &&
+                    c.bounds.right <= band.minOf { it.bounds.left } + 1.0f * h
             }
             var covered = bandLists.indices.filter { inside(it) }
             if (covered.size == 1) {
@@ -143,7 +144,7 @@ object Segmenter {
     }
 
     private fun isBraceCandidate(s: Stroke, h: Float) =
-        s.height > 1.7f * h && s.height > 2.5f * s.width && isBraceShape(s)
+        s.height > 1.5f * h && s.height > 1.8f * s.width && isBraceShape(s)
 
     /** A brace drawn as two strokes (upper and lower half) is joined into one stroke. */
     private fun mergeBraceHalves(strokes: List<Stroke>, h: Float): List<Stroke> {
@@ -228,6 +229,45 @@ object Segmenter {
         }
         result.add(current)
         return result
+    }
+
+    /**
+     * Exponents, limits of ∫ and Σ, indices: small groups written above or below a line (with a gap,
+     * so they formed a band of their own) belong to the nearest line they overlap horizontally.
+     */
+    private fun attachSmallGroups(input: List<List<Stroke>>, h: Float): List<List<Stroke>> {
+        val bands = input.map { it.toMutableList() }.toMutableList()
+        var changed = true
+        while (changed) {
+            changed = false
+            for (i in bands.indices) {
+                val b = bands[i]
+                val left = b.minOf { it.bounds.left }
+                val right = b.maxOf { it.bounds.right }
+                val small = typicalHeight(b) < 0.8f * h && right - left < 3.5f * h
+                if (!small) continue
+                var best = -1
+                var bestGap = Float.MAX_VALUE
+                for (j in intArrayOf(i - 1, i + 1)) {
+                    if (j !in bands.indices) continue
+                    val n = bands[j]
+                    if (right < n.minOf { it.bounds.left } - h || left > n.maxOf { it.bounds.right } + h) continue
+                    val gap = if (j < i) b.minOf { it.bounds.top } - n.maxOf { it.bounds.bottom }
+                    else n.minOf { it.bounds.top } - b.maxOf { it.bounds.bottom }
+                    if (gap < 1.2f * h && gap < bestGap) {
+                        best = j
+                        bestGap = gap
+                    }
+                }
+                if (best >= 0) {
+                    bands[best].addAll(b)
+                    bands.removeAt(i)
+                    changed = true
+                    break
+                }
+            }
+        }
+        return bands
     }
 
     private fun isBar(s: Stroke, h: Float) = s.width > 1.6f * s.height && s.width > 0.6f * h

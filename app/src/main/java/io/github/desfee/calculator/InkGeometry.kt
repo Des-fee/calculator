@@ -50,7 +50,7 @@ class InkGeometry(
             val raised = strokes.any {
                 // a real character (not the flag of a 5 or the bar of a t), smaller than the body
                 !isDot(it) && !overBar(it) && it.height > 0.3f * h && it.height < 0.8f * (bottom - top) &&
-                    it.bounds.bottom < mid - 0.05f * h && it.bounds.top < top + 0.1f * h
+                    it.bounds.bottom < mid - 0.15f * h && it.bounds.top < top + 0.1f * h
             }
             // free-standing dots only: the dot of i/j or of ÷ has ink right above or below it
             val attached = { d: Stroke ->
@@ -67,9 +67,13 @@ class InkGeometry(
             return InkGeometry(raised, dots, bars.size)
         }
 
-        /** Readings that agree with the geometry first; ties keep the model's order. */
-        fun rank(hyps: List<List<String>>, g: InkGeometry): List<List<String>> =
-            hyps.withIndex().sortedWith(compareBy({ penalty(it.value, g) }, { it.index })).map { it.value }
+        /**
+         * Readings ordered by the model's confidence (mean log-probability per token), nudged by the
+         * geometry: a reading that contradicts the shape of the ink only loses to one the model finds
+         * nearly as likely. The model is trusted when it is sure; the geometry decides close calls.
+         */
+        fun rank(hyps: List<Pair<List<String>, Float>>, g: InkGeometry): List<List<String>> =
+            hyps.sortedBy { (toks, score) -> -score + 0.08f * penalty(toks, g) }.map { it.first }
 
         fun penalty(toks: List<String>, g: InkGeometry): Int {
             var p = 0

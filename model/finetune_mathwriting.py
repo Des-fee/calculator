@@ -367,8 +367,9 @@ def put_exponent(lay, glyphs, rng, scale, dy, depth=1):
     """'^ { e }' after the glyph just written; e can carry its own exponent (towers 2^{3^{4^{...}}})."""
     lay.tokens += ["^", "{"]
     lay.x -= 0.08 * scale
-    s = scale * rng.uniform(0.55, 0.7)
-    edy = dy + rng.uniform(0.38, 0.55) * scale - s  # exponent baseline near the middle of its base
+    # people write exponents anywhere from half-height to well above the base, small or almost full size
+    s = scale * rng.uniform(0.45, 0.85)
+    edy = dy + rng.uniform(0.2, 0.8) * scale - s
     r = rng.random()
     if r < 0.55:
         put(lay, rng.choice("22345"), glyphs, rng, s, edy)
@@ -398,7 +399,9 @@ def put_integral(lay, glyphs, rng, var):
     right = x0 + w
     if rng.random() < 0.8:
         s = rng.uniform(0.5, 0.62)
-        for sub_sup, xk, dy in (("_", 0.7, rng.uniform(1.05, 1.25)), ("^", 1.0, rng.uniform(-0.2, 0.0) - s)):
+        # limits: right next to the sign, above/below it, or far off — all seen in handwriting
+        for sub_sup, xk, dy in (("_", rng.uniform(0.3, 1.2), rng.uniform(0.9, 1.6)),
+                                ("^", rng.uniform(0.5, 1.4), rng.uniform(-0.6, 0.15) - s)):
             lay.tokens += [sub_sup, "{"]
             lay.x = x0 + w * xk
             if sub_sup == "_" and rng.random() < 0.5:

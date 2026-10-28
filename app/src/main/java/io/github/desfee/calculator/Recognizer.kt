@@ -144,7 +144,7 @@ class Recognizer(context: Context) {
     private class Hyp(val seq: IntArray, val score: Float)
 
     /** Left-to-right beam search; mirrors beam_search() in model/export_onnx.py. Best hypothesis first. */
-    private fun beamSearch(feat: Feature, beam: Int, maxLen: Int): List<List<String>> {
+    private fun beamSearch(feat: Feature, beam: Int, maxLen: Int): List<Pair<List<String>, Float>> {
         var beams = listOf(Hyp(intArrayOf(SOS), 0f))
         val done = mutableListOf<Pair<IntArray, Float>>()
         for (step in 0 until maxLen) {
@@ -172,8 +172,8 @@ class Recognizer(context: Context) {
         }
         if (done.isEmpty()) beams.forEach { done.add(it.seq.copyOfRange(1, it.seq.size) to it.score / it.seq.size) }
         return done.sortedByDescending { it.second }
-            .map { h -> h.first.map { vocab.getOrElse(it) { "" } }.filter { it.isNotEmpty() } }
-            .distinct()
+            .map { h -> h.first.map { vocab.getOrElse(it) { "" } }.filter { it.isNotEmpty() } to h.second }
+            .distinctBy { it.first }
     }
 
     private fun topK(row: FloatArray, k: Int): IntArray {
