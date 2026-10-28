@@ -317,6 +317,30 @@ def test_graphs():
     assert len(su["z"]) == 11 and su["z"][0][0] == 4.0
 
 
+def test_higher():
+    def ans(t):
+        r = json.loads(ce.evaluate_document(json.dumps([{"id": "a", "type": "text", "text": t, "forced": True}]), 30))[0]
+        assert r.get("answer"), (t, r)
+        return r["answer"]
+
+    cases = {
+        "grad(x^2*y + z)=": "[2xy  x²  1]", "div([x^2, y^2, z])=": "2x + 2y + 1", "curl([-y, x, 0])=": "[0  0  2]",
+        "hessian(x^3+y^2)=": "[6x  0; 0  2]", "int2(x*y, x, 0, 1, y, 0, x)=": "1/8 = 0.125",
+        "laplace(sin(t))=": "1/(s² + 1)", "ilaplace(1/(s^2+1))=": "sin(t)", "ztrans(2^n)=": "z/(z − 2)",
+        "iztrans(z/(z-2))=": "2ⁿ", "a(n+1) = 2a(n) + 1; a(0) = 1": "a(n) = 2^(n + 1) − 1",
+        "x' = y; y' = -x; x(0)=1; y(0)=0": "x = cos(t)\ny = −sin(t)",
+        "extrema(x^3 - 3x + y^2)=": "(−1; 0): седло f = 2\n(1; 0): минимум f = −2",
+        "lagrange(x+y, x^2+y^2-1)=": "(−√2/2; −√2/2): минимум f = −√2\n(√2/2; √2/2): максимум f = √2",
+        "invnorm(0.975)=": "1.959963985", "binomcdf(10, 1/2, 3)=": "11/64 = 0.171875",
+        "polyfit([0,1,2],[1,2,5],2)=": "x² + 1", "simplify_bool((x & y) | (x & ~y))=": "x",
+        "union([1,2],[2,3])=": "{1, 2, 3}", "residue(1/(z^2+1), z, i)=": "−i/2",
+    }
+    for t, expected in cases.items():
+        got = ans(t)
+        assert got == expected, (t, got, expected)
+    assert ans("y' = sin(x*y); y(0)=1").startswith("формулы нет, численно")
+
+
 def test_plot():
     data = json.loads(ce.plot_points("y = 1/x", -1.0, 1.0, 5))
     assert data["ys"][2] is None and data["ys"][0] == -1.0, data

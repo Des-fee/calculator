@@ -116,7 +116,7 @@ class MathEditor(context: Context, private val colors: Palette, private val list
 
         // tabs
         val tabRow = LinearLayout(context).apply { orientation = HORIZONTAL; setPadding(0, dp(4f), 0, dp(4f)) }
-        for (name in listOf("123", "f(x)", "x y", "∫ Σ", "ещё")) {
+        for (name in listOf("123", "f(x)", "x y", "∫ Σ", "ещё", "выш.")) {
             val t = TextView(context).apply {
                 text = name
                 textSize = 14f
@@ -170,6 +170,12 @@ class MathEditor(context: Context, private val colors: Palette, private val list
             listOf(Key("на множ.", "factorint(|)"), Key("простое?", "isprime(|)"), Key("делители", "divisors(|)"), Key("НОД", "gcd(|, )"), Key("НОК", "lcm(|, )"), Key("в 2-ю", "bin(|)")),
             listOf(Key("среднее", "mean(|)"), Key("медиана", "median(|)"), Key("σ", "std(|)"), Key("λ матр.", "eigenvals(|)"), Key("ранг", "rank(|)"), Key("экстр.", "extrema(|)")),
             listOf(Key("max", "max(|, x, 0, 1)"), Key("min", "min(|, x, 0, 1)"), Key("Тейлор", "taylor(|, x, 0, 6)"), Key("исслед.", "study(|)"), Key("A·X=B", "lsolve([[|, 0], [0, 1]], [1, 1])"), back),
+        ))
+        addPage("выш.", listOf(
+            listOf(Key("∂/∂y", "diff(|, y)"), Key("grad", "grad(|)"), Key("div", "div([|, , ])"), Key("rot", "curl([|, , ])"), Key("Якоби", "jacobian([|, ])"), Key("Гессе", "hessian(|)")),
+            listOf(Key("∬", "int2(|, x, 0, 1, y, 0, 1)"), Key("∭", "int3(|, x, 0, 1, y, 0, 1, z, 0, 1)"), Key("Лаплас", "laplace(|)"), Key("Лапл.⁻¹", "ilaplace(|)"), Key("Фурье", "fourier(|)"), Key("Z", "ztrans(|)")),
+            listOf(Key("aₙ₊₁", "a(n+1) = |; a(0) = 1"), Key("Лагранж", "lagrange(|, x + y - 1)"), Key("N(0,1)", "normcdf(|)"), Key("бином", "binompdf(|, 0.5, )"), Key("регрес.", "linreg([|], [])"), Key("истинн.", "truth(|)")),
+            listOf(Key("∧", " & "), Key("∨", " | "), Key("¬", "~"), Key("∪", "union(|, )"), Key("∩", "intersect(|, )"), back),
         ))
         showPage("123")
     }

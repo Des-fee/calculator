@@ -879,6 +879,8 @@ def normalize_text(text):
     s = re.sub(r"\|([^|]+)\|", r"Abs(\1)", s)
     # matrices: [[1,2],[3,4]] -> Matrix([[1,2],[3,4]])
     s = _wrap_matrices(s)
+    # logic typed with symbols (after |x| became Abs)
+    s = s.replace("∧", " & ").replace("∨", " | ").replace("¬", "~").replace("⊕", " ^ ")
     s = s.replace(",", ", ")
     return s
 
@@ -1991,7 +1993,7 @@ def evaluate_trailing(lhs_text, forced):
         return [X(sp.sympify(raw) if not isinstance(raw, dict) else list(raw.items()))], None
     if isinstance(raw, sp.MatrixBase):
         return value_line(raw.applyfunc(sp.simplify)), None
-    if re.search(r"\b(apart|expand|factor|together|cancel|collect|expand_trig|trigsimp|series|taylor|rref|charpoly)\s*\(",
+    if re.search(r"\b(apart|expand|factor|together|cancel|collect|expand_trig|trigsimp|series|taylor|rref|charpoly|laurent|polyfit)\s*\(",
                  normalize_text(lhs_text)):
         # the user asked for this form: do not simplify it back
         return [X(raw)], (lhs_text if raw.free_symbols <= {sp.Symbol("x")} and raw.free_symbols else None)
@@ -2190,6 +2192,10 @@ def process(text, forced=False):
             return res
     if re.search(r"\bmod\b", text):
         return process_mod(text, forced)
+    if calc_higher.REC_TERM.search(text):
+        rec = calc_higher.process_recurrence([text])
+        if rec is not None:
+            return answer("solve", rec)
     pieces, ops = split_relation(text)
     if ops == ["="] and pieces[1].strip() and "diff(" in normalize_text(text) and re.search(r"\by\b", text):
         return process_ode(pieces[0], pieces[1])
@@ -2381,8 +2387,11 @@ def process_ivp(texts):
     rhs = parse_expr(normalize_text(pieces[1]), local_dict=loc, transformations=TRANSFORMS)
     try:
         sol = sp.dsolve(sp.Eq(lhs, rhs), Y_OF_X, ics=ics)
-    except (NotImplementedError, ValueError) as ex:
-        raise CalcError("задача Коши не решается в формулах") from ex
+    except (NotImplementedError, ValueError, TypeError) as ex:
+        num = _ivp_numeric(lhs, rhs, ics)
+        if num is None:
+            raise CalcError("задача Коши не решается в формулах") from ex
+        return num
     sols = sol if isinstance(sol, list) else [sol]
     return [[X(sp.Symbol("y")), O("="), X(s.rhs)] for s in sols[:MAX_ROOTS]]
 
@@ -2487,8 +2496,55 @@ def drawn_answer(texts):
     return None
 
 
+def _ivp_numeric(lhs, rhs, ics):
+    """y' = f(x, y), y(x0) = y0 without a formula: Runge–Kutta, y at a few points (the graph shows the curve)."""
+    x = sp.Symbol("x")
+    yv = sp.Symbol("y")
+    if len(ics) != 1:
+        return None
+    (cond, y0), = ics.items()
+    if cond.has(sp.Derivative):
+        return None
+    x0 = cond.args[0]
+    try:
+        f_expr = sp.solve(sp.Eq(lhs, rhs), Y_OF_X.diff(x))
+    except NotImplementedError:
+        return None
+    if len(f_expr) != 1:
+        return None
+    f = sp.lambdify((x, yv), f_expr[0].subs(Y_OF_X, yv), modules=["math"])
+    xs, ys = float(x0), float(y0)
+    h = 0.001
+    marks = {round(float(x0) + d, 6): None for d in (0.5, 1, 2)}
+    try:
+        while xs < float(x0) + 2 - 1e-9:
+            k1 = f(xs, ys)
+            k2 = f(xs + h / 2, ys + h / 2 * k1)
+            k3 = f(xs + h / 2, ys + h / 2 * k2)
+            k4 = f(xs + h, ys + h * k3)
+            ys += h / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+            xs += h
+            key = round(xs, 6)
+            if key in marks:
+                marks[key] = ys
+    except (ValueError, ZeroDivisionError, OverflowError):
+        pass
+    lines = [[W("формулы нет, численно (Рунге — Кутта):")]]
+    for at, val in marks.items():
+        if val is not None and math.isfinite(val):
+            lines.append([("y(%s)" % fmt(sp.nsimplify(at)), r"y\left(%s\right)" % to_tex(sp.nsimplify(at))),
+                          (" ≈ ", r" \approx ")] + [X(sp.Float(val, 8))])
+    return lines if len(lines) > 1 else None
+
+
 def process_system(texts):
     """Answer lines of a system written one equation per line."""
+    rec = calc_higher.process_recurrence(texts)
+    if rec is not None:
+        return rec
+    odes = calc_higher.process_ode_system(texts)
+    if odes is not None:
+        return odes
     ivp = process_ivp(texts)
     if ivp is not None:
         return ivp
@@ -3023,3 +3079,9 @@ def plot_points(text, xmin, xmax, n):
         return {"xs": xs, "ys": ys, "label": "y = " + fmt(expr)}
 
     return json.dumps(_safe(run), ensure_ascii=False)
+
+
+# higher mathematics lives in its own module; it needs the helpers above
+import calc_higher  # noqa: E402
+
+LOCALS.update(calc_higher.register())
