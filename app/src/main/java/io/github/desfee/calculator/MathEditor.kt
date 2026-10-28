@@ -27,6 +27,9 @@ import android.widget.TextView
  */
 @SuppressLint("ViewConstructor")
 class MathEditor(context: Context, private val colors: Palette, private val listener: Listener) : LinearLayout(context) {
+    // GradientDrawable has its own `colors`, so drawables use this name for the palette
+    private val pal = colors
+
     interface Listener {
         /** The text changed: compute its preview and answer (debounce in the caller). */
         fun onEditorText(text: String)
@@ -173,8 +176,8 @@ class MathEditor(context: Context, private val colors: Palette, private val list
         setPadding(dp(12f), dp(7f), dp(12f), dp(7f))
         background = GradientDrawable().apply {
             cornerRadius = dp(16f).toFloat()
-            setColor(if (accent) colors.accent else colors.paper)
-            setStroke(dp(1f), if (accent) colors.accent else colors.rule)
+            setColor(if (accent) pal.accent else pal.paper)
+            setStroke(dp(1f), if (accent) pal.accent else pal.rule)
         }
         layoutParams = LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(6f) }
         setOnClickListener { onClick() }
@@ -192,7 +195,7 @@ class MathEditor(context: Context, private val colors: Palette, private val list
                     setTextColor(if (k.action == "enter") colors.paper else colors.text)
                     background = GradientDrawable().apply {
                         cornerRadius = dp(8f).toFloat()
-                        setColor(if (k.action == "enter") colors.accent else colors.paper)
+                        setColor(if (k.action == "enter") pal.accent else pal.paper)
                     }
                     setOnClickListener { press(k) }
                     if (k.action == "back") setOnLongClickListener { input.setText(""); true }
